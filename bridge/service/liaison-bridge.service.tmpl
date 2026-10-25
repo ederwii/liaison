@@ -1,0 +1,17 @@
+[Unit]
+Description=liaison Slack bridge
+After=network-online.target
+
+[Service]
+ExecStart={BUN} run {BRIDGE_DIR}/src/index.ts
+WorkingDirectory={BRIDGE_DIR}
+Environment=HOME={HOME}
+Environment=PATH={PATH}
+Environment=LIAISON_ROOT={LIAISON_HOME}
+Restart=always
+RestartSec=5
+StandardOutput=append:{LIAISON_HOME}/daemon.log
+StandardError=append:{LIAISON_HOME}/daemon.log
+
+[Install]
+WantedBy=default.target

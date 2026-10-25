@@ -1,0 +1,28 @@
+{
+  "name": "liaison-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local daemon + CLI so any Claude Code session can talk to its owner over Slack at zero token cost while waiting.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "smoke": "bun run scripts/smoke.ts",
+    "daemon": "bun run src/index.ts"
+  },
+  "bin": {
+    "slack-say": "./bin/slack-say",
+    "slack-ask": "./bin/slack-ask",
+    "slack-inbox": "./bin/slack-inbox",
+    "slack-ack": "./bin/slack-ack",
+    "slack-register": "./bin/slack-register"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@slack/socket-mode": "^3.0.1",
+    "@slack/web-api": "^8.1.1"
+  }
+}

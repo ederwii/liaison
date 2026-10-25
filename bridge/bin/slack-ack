@@ -1,0 +1,87 @@
+#!/usr/bin/env bun
+// slack-ack — react ✅ to a message the owner sent, so they know a session
+// actually READ it (not just received it — the daemon never auto-reacts on
+// ingest; see src/types.ts ReactionEvent). Writes ONE
+// outbox `reaction` line and exits. Never blocks, never holds a token.
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { buildAckReaction, parseAckedFile, selectNewestUnacked } from "../src/ack.ts";
+import { projectSlug, resolveChannelId } from "../src/client.ts";
+import { appendLine, readLines } from "../src/jsonl.ts";
+import { bridgePaths } from "../src/paths.ts";
+import { bool, exitCodeFor, parseArgs, str } from "../src/args.ts";
+import type { InboxLine } from "../src/types.ts";
+
+const p = parseArgs(process.argv.slice(2));
+const last = bool(p, "last");
+const tsArg = p.positional[0];
+
+if ((!tsArg && !last) || p.flags["help"]) {
+  console.error(`slack-ack <slack_ts> [--channel <id>]
+slack-ack --last
+
+  <slack_ts>       the message's slack_ts (from an inbox "message" or
+                    "answer" line) to react to with ✅
+  --channel <id>   channel to react in; default: resolved from the current
+                    directory (registered project, else the office), same
+                    routing as slack-say
+  --last           react to the newest owner message in this project's inbox
+                    (kind "message", or "answer" with from != "system") that
+                    has not been acked yet. Tracks acked ts values in
+                    ~/.liaison/<project>/.acked. Nothing new => exit 0,
+                    no reaction queued.
+
+Never run by the daemon on ingest — reacting means "a session read this",
+not "the daemon received this". A session (or a monitor one-liner
+in a Stop hook) calls this after it has actually read the line.
+
+Exit codes: 0 queued (or nothing new for --last) · 1 failed · 2 bad usage ·
+4 this folder is not registered and no office channel is configured.`);
+  process.exit(tsArg || last ? 0 : 2);
+}
+
+const root = bridgePaths().root;
+const cwd = process.cwd();
+
+async function queue(project: string, channel: string, slackTs: string): Promise<string> {
+  const e = buildAckReaction(project, channel, slackTs);
+  await appendLine(bridgePaths(root).outbox(project), e);
+  return e.id;
+}
+
+async function markAcked(slug: string, slackTs: string): Promise<void> {
+  await mkdir(bridgePaths(root).projectDir(slug), { recursive: true });
+  await appendFile(bridgePaths(root).ackedFile(slug), `${slackTs}\n`, "utf8");
+}
+
+try {
+  const slug = await projectSlug(root, cwd);
+
+  if (last) {
+    let acked = new Set<string>();
+    try { acked = parseAckedFile(await readFile(bridgePaths(root).ackedFile(slug), "utf8")); }
+    catch { /* nothing acked yet */ }
+
+    const lines = await readLines<InboxLine>(bridgePaths(root).inbox(slug));
+    const newest = selectNewestUnacked(lines, acked);
+    if (!newest) {
+      console.error(`slack-ack: nothing new to acknowledge in ${slug}`);
+      process.exit(0);
+    }
+    await queue(slug, newest.channel, newest.slack_ts);
+    await markAcked(slug, newest.slack_ts);
+    console.error(`queued ack for ${newest.slack_ts} -> ${slug}`);
+    process.exit(0);
+  }
+
+  const channel = str(p, "channel") ?? (await resolveChannelId(root, cwd));
+  if (!channel) {
+    console.error(`slack-ack: could not resolve a channel id for ${slug} — pass --channel <id>`);
+    process.exit(1);
+  }
+  const id = await queue(slug, channel, tsArg!);
+  console.error(`queued ack ${id} -> ${slug} (${channel})`);
+  process.exit(0);
+} catch (err) {
+  console.error(`slack-ack: ${(err as Error).message}`);
+  process.exit(exitCodeFor(err));
+}

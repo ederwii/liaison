@@ -1,0 +1,12 @@
+{
+  "departments": [
+    {
+      "name": "engineering",
+      "enabled": true,
+      "dir": "departments/engineering",
+      "channel": "liaison-engineering",
+      "effort": "medium",
+      "start_prompt_file": "departments/engineering/START.md"
+    }
+  ]
+}

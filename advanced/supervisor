@@ -1,0 +1,79 @@
+#!/bin/bash
+# Keeps the departments of the roster alive: one tmux session per enabled department, named liaison-<name>.
+# usage: supervisor [--once] [--roster <file>]     (--once is the default and the only mode: one pass, then exit)
+# Prints one line per department: "<name>: running|started|disabled|error: ...". Exit 1 if any department had an error.
+# Never kills anything. bash 3.2 compatible. Relative "dir" and "start_prompt_file" resolve against the roster's folder.
+
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+  _d="$(cd "$(dirname "$_src")" && pwd -P)"
+  _src="$(readlink "$_src")"
+  case "$_src" in /*) ;; *) _src="$_d/$_src" ;; esac
+done
+LIAISON_REPO="$(cd "$(dirname "$_src")/.." && pwd -P)"
+unset _src _d
+. "$LIAISON_REPO/lib/env.sh"
+. "$LIAISON_REPO/lib/state.sh"
+. "$LIAISON_REPO/engines/claude/launch.sh"
+
+roster=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --once)   shift ;;
+    --roster) [ $# -ge 2 ] || { echo "supervisor: --roster needs a file" >&2; exit 2; }; roster="$2"; shift 2 ;;
+    *)        echo "usage: supervisor [--once] [--roster <file>]" >&2; exit 2 ;;
+  esac
+done
+[ -n "$roster" ] || roster="$LIAISON_STATE_DIR/roster.json"
+[ -f "$roster" ] || { echo "supervisor: no roster at $roster" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "supervisor: python3 is required" >&2; exit 1; }
+command -v tmux >/dev/null 2>&1 || { echo "supervisor: tmux is required" >&2; exit 1; }
+base="$(cd "$(dirname "$roster")" && pwd -P)"
+
+# One line per department, fields separated by the unit separator (so empty fields survive `read`).
+rows="$(LS_FILE="$roster" python3 -c '
+import json, os
+for d in json.load(open(os.environ["LS_FILE"])).get("departments", []):
+    f = [str(d.get("name", "")), "1" if d.get("enabled", True) is True else "0", str(d.get("dir", "")),
+         str(d.get("effort", "") or "medium"), str(d.get("start_prompt_file", ""))]
+    print("\x1f".join(f).replace("\n", " "))')" || { echo "supervisor: could not read $roster" >&2; exit 1; }
+
+US="$(printf '\037')"
+status=0
+while IFS="$US" read -r name enabled dir effort pfile; do
+  [ -n "$name" ] || continue
+  case "$name" in
+    *[!a-z0-9-]*|-*) echo "$name: error: invalid name"; status=1; continue ;;
+  esac
+  if [ "$enabled" != 1 ]; then echo "$name: disabled"; continue; fi
+  case "$effort" in
+    *[!a-z]*) echo "$name: error: invalid effort"; status=1; continue ;;
+  esac
+  if [ -z "$dir" ]; then echo "$name: error: dir not set"; status=1; continue; fi
+  case "$dir" in /*) abs="$dir" ;; *) abs="$base/$dir" ;; esac
+  if [ ! -d "$abs" ]; then echo "$name: error: dir missing"; status=1; continue; fi
+  abs="$(cd "$abs" && pwd -P)"
+  session="liaison-$name"
+  if tmux has-session -t "$session" >/dev/null 2>&1; then echo "$name: running"; continue; fi
+
+  case "$pfile" in /*) pabs="$pfile" ;; *) pabs="$base/$pfile" ;; esac
+  prompt=""
+  if [ -n "$pfile" ] && [ -f "$pabs" ]; then
+    prompt="$(head -c 2000 "$pabs" | tr '\n\r' '  ')"
+  fi
+  [ -n "$prompt" ] || prompt="You are the $name department of this office. Read AGENT.md in this folder, then follow it."
+
+  cmd="$(engine_launch_cmd "$abs" "$pabs" "$effort")" || { echo "$name: error: no launch command"; status=1; continue; }
+  if ! tmux new-session -d -s "$session" -c "$abs" "$cmd" </dev/null; then echo "$name: error: tmux new-session failed"; status=1; continue; fi
+  # Give the engine a moment to draw its prompt before typing into it (LIAISON_START_DELAY seconds, default 3).
+  sleep "${LIAISON_START_DELAY:-3}"
+  # The engine may have exited at once (for example "claude" is not on this PATH): check before claiming success.
+  if ! tmux has-session -t "$session" >/dev/null 2>&1; then echo "$name: error: session died on start"; status=1; continue; fi
+  if ! tmux send-keys -t "$session" -l -- "$prompt" </dev/null || ! tmux send-keys -t "$session" Enter </dev/null; then
+    echo "$name: error: session died on start"; status=1; continue
+  fi
+  echo "$name: started"
+done <<ROWS
+$rows
+ROWS
+exit "$status"

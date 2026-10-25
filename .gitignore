@@ -1,0 +1,8 @@
+.liaison/
+.claude/skills/
+.claude/settings.local.json
+.superpowers/
+projects/
+node_modules/
+*.log
+__pycache__/

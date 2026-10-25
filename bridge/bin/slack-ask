@@ -1,0 +1,115 @@
+#!/usr/bin/env bun
+// slack-ask — ask the owner a question in Slack and DO NOT WAIT.
+// Prints the question id on stdout, then exits. The answer arrives in the
+// project inbox; the session should arm a watcher and end its turn.
+import { ask, cancelQuestion, CancelError, openQuestions } from "../src/client.ts";
+import { bridgePaths } from "../src/paths.ts";
+import { bool, exitCodeFor, parseArgs, str, validateButtonLetters } from "../src/args.ts";
+import type { OnTimeout, QuestionType } from "../src/types.ts";
+
+const p = parseArgs(process.argv.slice(2));
+
+// ---- --open / --cancel: no new question is asked
+const clip = (t: string) => t.replace(/\s+/g, " ").trim().slice(0, 70);
+if (p.flags["open"]) {
+  try {
+    const slug = str(p, "project");
+    const qs = await openQuestions(slug ? { slug } : {});
+    if (bool(p, "wait-hint")) {
+      for (const q of qs) {
+        console.log(`[slack-wait] open question ${q.question_id} (${q.ageMin} min ago): "${clip(q.text)}" — if this message resolved or changed it: slack-ask --cancel ${q.question_id} --reason '...'  (or --replaces ${q.question_id} when asking again)`);
+      }
+    } else {
+      for (const q of qs) console.log(`${q.question_id}  ${q.ageMin} min  ${clip(q.text)}`);
+    }
+    process.exit(0);
+  } catch (err) { console.error(`slack-ask: ${(err as Error).message}`); process.exit(exitCodeFor(err)); }
+}
+const cancelId = str(p, "cancel");
+if (p.flags["cancel"] !== undefined) {
+  if (!cancelId) { console.error("slack-ask: --cancel needs a question_id"); process.exit(2); }
+  try {
+    const e = await cancelQuestion({ questionId: cancelId, ...(str(p, "reason") ? { reason: str(p, "reason")! } : {}) });
+    console.log(e.question_id);
+    console.error(`cancelled ${e.question_id} (${e.reason})`);
+    process.exit(0);
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exit(err instanceof CancelError ? 2 : exitCodeFor(err));
+  }
+}
+
+const text = p.positional.join(" ").trim();
+const type = (str(p, "type") ?? "yesno") as QuestionType;
+
+if (!text || p.flags["help"]) {
+  console.error(`slack-ask <question> --type buttons|yesno|select|multiselect|text [options]
+
+  --type <t>              buttons | yesno | select | multiselect | text
+  --options "A,B,C"       required for buttons/select/multiselect
+  --timeout 30m           30s | 30m | 2h | 1d. Omitted => waits forever.
+  --default B             applied when --on-timeout default fires
+  --on-timeout <mode>     default (apply --default) | escalate (@mention, keep
+                          waiting) | block (tell the session it is blocked)
+  --urgent                @mention the owner on the question itself
+  --replaces <id>         cancel that earlier question of this project, then ask this one
+  --cancel <id> [--reason '<text>']   close a question that no longer applies (no reminder, no default)
+  --open                  list this project's open questions
+
+Prints the question id on stdout. Then arm a watcher and END YOUR TURN.
+The channel comes from the registry (~/.liaison/projects.yml): the project that
+claims the current directory, else the office channel. slack-ask never registers
+anything; use slack-register for that.
+Exit codes: 0 asked · 1 failed · 2 bad usage · 4 this folder is not registered
+and no office channel is configured (run ./setup).`);
+  process.exit(text ? 0 : 2);
+}
+
+const VALID: QuestionType[] = ["buttons", "yesno", "select", "multiselect", "text"];
+if (!VALID.includes(type)) {
+  console.error(`slack-ask: --type must be one of ${VALID.join(", ")}`);
+  process.exit(2);
+}
+
+if (type === "buttons") {
+  const opts = (str(p, "options") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const bad = validateButtonLetters(text, opts);
+  if (bad) {
+    console.error(bad);
+    process.exit(2);
+  }
+}
+
+// --replaces: validate the OLD id first, but cancel only after the new ask is queued
+// (an invalid new ask exits above, before this point, so nothing is cancelled).
+const replaces = str(p, "replaces");
+if (replaces) {
+  try {
+    if (!(await openQuestions()).some((q) => q.question_id === replaces)) {
+      console.error(`slack-ask: --replaces ${replaces}: no such open question in this project. Nothing was sent.`);
+      process.exit(2);
+    }
+  } catch (err) { console.error(`slack-ask: ${(err as Error).message}`); process.exit(exitCodeFor(err)); }
+}
+
+try {
+  const e = await ask({
+    text,
+    type,
+    ...(str(p, "options") ? { options: str(p, "options")!.split(",").map((s) => s.trim()).filter(Boolean) } : {}),
+    timeout: str(p, "timeout") ?? null,
+    default: str(p, "default") ?? null,
+    ...(str(p, "on-timeout") ? { onTimeout: str(p, "on-timeout") as OnTimeout } : {}),
+    urgent: bool(p, "urgent"),
+  });
+  if (replaces) {
+    await cancelQuestion({ questionId: replaces, reason: "replaced by a new question" });
+    console.error(`cancelled ${replaces} (replaced by ${e.question_id})`);
+  }
+  const inbox = bridgePaths().inbox(e.project);
+  console.log(e.question_id);
+  console.error(`asked in ${e.project}${e.registered || e.inOffice ? "" : " (folder not registered: office channel)"}; answer will land in ${inbox}`);
+} catch (err) {
+  console.error(`slack-ask: ${(err as Error).message}`);
+  process.exit(exitCodeFor(err));
+}

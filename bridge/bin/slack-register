@@ -1,0 +1,45 @@
+#!/usr/bin/env bun
+// slack-register — tell the bridge which folder is which project, or which
+// folder is the office. The ONLY thing (besides ./setup, which calls it) that
+// writes ~/.liaison/projects.yml. Idempotent: the same call twice changes nothing.
+import { parseArgs, str } from "../src/args.ts";
+import { bridgePaths } from "../src/paths.ts";
+import { registerOffice, registerProject, RegisterCollision, RegisterUsageError } from "../src/register.ts";
+
+const p = parseArgs(process.argv.slice(2));
+const office = p.flags["office"] !== undefined;
+// `--office <path>` parses as a flag with a value, not a positional.
+const officePath = office ? str(p, "office") ?? p.positional[0] : undefined;
+const channel = str(p, "channel");
+
+const usage = `slack-register <abs-path> <name> [--channel <channel>]
+slack-register --office <abs-path> [--channel <channel>]
+
+  <abs-path> <name>   register that folder (and everything under it) as project
+                      <name>; its messages go to #liaison-<name>
+  --office <abs-path> register the office: the folder the coordinator runs in.
+                      Every folder that is not a registered project talks to
+                      the office channel (default #liaison-office)
+  --channel <name>    use this Slack channel name instead of the default
+
+Writes ~/.liaison/projects.yml (under a lock). Registering the same thing twice
+is a no-op. The daemon picks the change up without a restart.
+
+Exit codes: 0 registered (or already was) · 2 bad usage · 3 the name, path or
+channel clashes with an existing entry (nothing written) · 1 failed.`;
+
+if (p.flags["help"]) { console.error(usage); process.exit(0); }
+
+const needsPath = office ? !officePath : p.positional.length !== 2;
+if (needsPath) { console.error(usage); process.exit(2); }
+
+try {
+  const root = bridgePaths().root;
+  const r = office
+    ? await registerOffice(root, officePath!, channel)
+    : await registerProject(root, p.positional[0]!, p.positional[1]!, channel);
+  console.log(`registered ${r.slug} -> #${r.channel}${r.registered ? "" : " (already registered, nothing changed)"}`);
+} catch (err) {
+  console.error(`slack-register: ${(err as Error).message}`);
+  process.exit(err instanceof RegisterCollision ? 3 : err instanceof RegisterUsageError ? 2 : 1);
+}

@@ -1,0 +1,61 @@
+#!/bin/bash
+# ./setup: one-command install. Safe to re-run: every step is skipped when it is already done.
+# bash 3.2 compatible.
+
+LIAISON_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+. "$LIAISON_REPO/lib/env.sh"
+. "$LIAISON_REPO/lib/common.sh"
+. "$LIAISON_REPO/lib/state.sh"
+. "$LIAISON_REPO/lib/daemon.sh"
+. "$LIAISON_REPO/lib/verify.sh"
+. "$LIAISON_REPO/lib/setup-steps.sh"
+
+usage() {
+  cat <<'USAGE'
+usage: ./setup [options]
+
+options:
+  --yes, -y              accept every default and never prompt (Slack tokens must then come from the
+                         environment: LIAISON_BOT_TOKEN, LIAISON_APP_TOKEN, LIAISON_OWNER_USER_IDS,
+                         or LIAISON_ENV_FILE=<file> holding those three keys)
+  --language xx          language for replies (default en)
+  --permission-mode m    supervised (default) or unattended
+  --no-aliases           do not touch the shell rc file
+  --no-autostart         do not install a launchd/systemd service; start the daemon by hand instead
+  --install-bun          with --yes, install bun when it is missing
+  -h, --help             show this help
+USAGE
+}
+
+OPT_YES=0; OPT_LANG=""; OPT_PERM=""; OPT_NO_ALIASES=0; OPT_NO_AUTOSTART=0; OPT_INSTALL_BUN=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --yes|-y)          OPT_YES=1 ;;
+    --language)        [ $# -ge 2 ] || { usage >&2; exit 2; }; OPT_LANG="$2"; shift ;;
+    --permission-mode) [ $# -ge 2 ] || { usage >&2; exit 2; }; OPT_PERM="$2"; shift ;;
+    --no-aliases)      OPT_NO_ALIASES=1 ;;
+    --no-autostart)    OPT_NO_AUTOSTART=1 ;;
+    --install-bun)     OPT_INSTALL_BUN=1 ;;
+    -h|--help)         usage; exit 0 ;;
+    *)                 echo "liaison setup: unknown option '$1'" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+WORK=0
+step_prereqs
+step_language
+step_tokens
+step_daemon
+step_office_channel
+step_greeting
+step_engine
+step_path
+step_aliases
+
+if [ "$WORK" -eq 0 ]; then
+  say "nothing to do: setup is already complete (see: liaison status)"
+else
+  say "setup complete. Open Claude Code in this folder: $LIAISON_OFFICE"
+fi
+[ "$GREETING_PENDING" -eq 0 ] || say "next: liaison verify"

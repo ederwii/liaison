@@ -1,0 +1,49 @@
+#!/usr/bin/env bun
+// slack-say — tell the owner something in this folder's Slack channel.
+// Writes ONE outbox line and exits. Never blocks, never holds a token.
+import { resolve } from "node:path";
+import { say } from "../src/client.ts";
+import { bool, exitCodeFor, parseArgs, str, validateAttachment } from "../src/args.ts";
+
+const p = parseArgs(process.argv.slice(2));
+const text = p.positional.join(" ").trim();
+const filePath = str(p, "file");
+
+if ((!text && !filePath) || p.flags["help"]) {
+  console.error(`slack-say <text> [--urgent] [--thread <question-id>] [--file <path>]
+
+  --urgent            @mention the owner (default: no mention)
+  --thread <qid>      post inside that question's thread instead of the channel
+  --file <path>       upload this local file (image, log, anything ≤ 20 MB);
+                      <text>, if given, becomes its caption
+
+The channel comes from the registry (~/.liaison/projects.yml): the project that
+claims the current directory, else the office channel. slack-say never registers
+anything; use slack-register for that.
+
+Exit codes: 0 sent · 1 failed · 2 bad usage (incl. a missing/too-large --file)
+· 4 this folder is not registered and no office channel is configured (run
+./setup).`);
+  process.exit(text || filePath ? 0 : 2);
+}
+
+if (filePath) {
+  const err = validateAttachment(filePath);
+  if (err) {
+    console.error(`slack-say: ${err}`);
+    process.exit(2);
+  }
+}
+
+try {
+  const e = await say({
+    text,
+    urgent: bool(p, "urgent"),
+    ...(str(p, "thread") ? { questionId: str(p, "thread")! } : {}),
+    ...(filePath ? { file: { path: resolve(filePath) } } : {}),
+  });
+  console.error(`queued -> ${e.project} (${e.id})${e.registered || e.inOffice ? "" : " — this folder is not registered, so it went to the office channel"}`);
+} catch (err) {
+  console.error(`slack-say: ${(err as Error).message}`);
+  process.exit(exitCodeFor(err));
+}

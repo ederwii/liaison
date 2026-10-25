@@ -1,0 +1,102 @@
+#!/bin/bash
+# liaison: Slack-reachable Claude Code coordinator. Dispatcher; subcommands live in lib/.
+# bash 3.2 compatible. Roots: LIAISON_HOME (default ~/.liaison) and LIAISON_OFFICE (default: repo root).
+
+# Resolve this script through symlinks (setup symlinks it into ~/.local/bin).
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+  _dir="$(cd "$(dirname "$_src")" && pwd -P)"
+  _src="$(readlink "$_src")"
+  case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
+done
+LIAISON_REPO="$(cd "$(dirname "$_src")/.." && pwd -P)"
+unset _src _dir
+
+# bun installed by ./setup lives in ~/.bun/bin, which a shell that predates the install does not have on PATH. The bridge
+# scripts start with `#!/usr/bin/env bun`, so put bun's folder on PATH for this run.
+_bun="$(command -v bun 2>/dev/null)"
+[ -n "$_bun" ] || { [ -x "$HOME/.bun/bin/bun" ] && _bun="$HOME/.bun/bin/bun"; }
+[ -z "$_bun" ] || { PATH="$(dirname "$_bun"):$PATH"; export PATH; }
+unset _bun
+
+. "$LIAISON_REPO/lib/env.sh"
+. "$LIAISON_REPO/lib/common.sh"
+. "$LIAISON_REPO/lib/state.sh"
+. "$LIAISON_REPO/lib/daemon.sh"
+. "$LIAISON_REPO/lib/projects.sh"
+. "$LIAISON_REPO/lib/discover.sh"
+. "$LIAISON_REPO/lib/learn.sh"
+. "$LIAISON_REPO/lib/guard.sh"
+. "$LIAISON_REPO/lib/advanced.sh"
+. "$LIAISON_REPO/lib/verify.sh"
+
+STEPS="bun tokens daemon office_channel greeting engine path language projects facts"
+
+usage() {
+  cat <<'USAGE'
+usage: liaison <command> [args]
+
+commands:
+  status      show setup progress, one line per step
+  setup       install and configure everything (also: ./setup)
+  daemon      start, stop or inspect the Slack bridge daemon
+  verify      check that the office answers end to end
+  discover    detect CLIs, gh and MCP servers -> .liaison/facts/tools.md
+  learn       gather a project's merged PRs, scripts and README as raw material
+  new         create a new project
+  register    register an existing project
+  guard       register this session with the context-guard hook
+  advanced    departments as tmux peers: enable | disable | run
+  -h, --help  show this help
+USAGE
+}
+
+cmd_status() {
+  local step st detail bad=0 pathbad=0 daemonbad=0
+  for step in $STEPS; do
+    st="$(state_get "$step")"
+    detail="$(state_detail "$step")"
+    if [ "$step" = path ] && [ "$st" = ok ]; then
+      # The live PATH wins over what setup recorded: a shell rc edit or a new terminal changes the answer.
+      case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *) say "path: not on PATH"; pathbad=1; continue ;;
+      esac
+    fi
+    if [ "$step" = daemon ] && [ "$st" = ok ]; then
+      # What setup recorded is a past fact: after a reboot a manually started daemon is gone. Ask the machine.
+      if ! daemon_live_pid >/dev/null && ! daemon_service_running >/dev/null; then
+        say "daemon: not running (liaison daemon start)"; daemonbad=1; continue
+      fi
+    fi
+    if [ -n "$detail" ]; then say "$step: $st ($detail)"; else say "$step: $st"; fi
+    case "$st" in ok|skipped) ;; *) bad=1 ;; esac
+  done
+  if [ "$bad" -eq 1 ]; then
+    say "next: ./setup"
+  elif [ "$daemonbad" -eq 1 ]; then
+    say "next: liaison daemon start"
+  elif [ "$pathbad" -eq 1 ]; then
+    say "next: add ~/.local/bin to your PATH (export PATH=\"\$HOME/.local/bin:\$PATH\" in your shell rc)"
+  else
+    say "next: open Claude Code in this folder"
+  fi
+  [ "$bad" -eq 0 ] && [ "$pathbad" -eq 0 ] && [ "$daemonbad" -eq 0 ]
+  return $?
+}
+
+case "${1:-}" in
+  status)   shift; cmd_status "$@"; exit $? ;;
+  setup)    shift; exec /bin/bash "$LIAISON_REPO/setup" "$@" ;;
+  daemon)   shift; daemon_main "$@"; exit $? ;;
+  new)      shift; cmd_new "$@"; exit $? ;;
+  register) shift; cmd_register "$@"; exit $? ;;
+  discover) shift; cmd_discover "$@"; exit $? ;;
+  learn)    shift; cmd_learn "$@"; exit $? ;;
+  guard)    shift; guard_main "$@"; exit $? ;;
+  advanced) shift; advanced_main "$@"; exit $? ;;
+  verify)   shift; verify_main "$@"; exit $? ;;
+  -h|--help|help) usage ;;
+  "")       usage >&2; exit 2 ;;
+  *)        echo "liaison: unknown command '$1'" >&2; usage >&2; exit 2 ;;
+esac

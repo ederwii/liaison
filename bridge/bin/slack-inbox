@@ -1,0 +1,56 @@
+#!/usr/bin/env bun
+// slack-inbox — read what the daemon has delivered for this folder's channel
+// (its registered project, else the office).
+// Per-reader cursors, so a watcher and a manual read do not eat each other.
+import { drainInbox, projectSlug } from "../src/client.ts";
+import { bridgePaths } from "../src/paths.ts";
+import { bool, exitCodeFor, parseArgs, str } from "../src/args.ts";
+
+const p = parseArgs(process.argv.slice(2));
+if (p.flags["help"]) {
+  console.error(`slack-inbox [--all] [--reader <name>] [--question <question-id>]
+
+  --all                every line ever, without moving any cursor
+  --reader <name>      keep a separate cursor (default: "default")
+  --question <qid>     only lines for that question (implies --all)
+  --path               print this folder's inbox path and exit (for watchers);
+                       an unregistered folder gets the office inbox
+
+Exit codes: 0 lines printed · 1 nothing new · 4 this folder is not registered
+and no office channel is configured (run ./setup).`);
+  process.exit(0);
+}
+
+try {
+  if (bool(p, "path")) {
+    const root = bridgePaths().root;
+    console.log(bridgePaths(root).inbox(await projectSlug(root, process.cwd())));
+    process.exit(0);
+  }
+} catch (err) {
+  console.error(`slack-inbox: ${(err as Error).message}`);
+  process.exit(exitCodeFor(err, 2));
+}
+
+const qid = str(p, "question");
+let lines: Awaited<ReturnType<typeof drainInbox>>;
+try {
+  lines = await drainInbox({
+    ...(str(p, "reader") ? { reader: str(p, "reader")! } : {}),
+    all: bool(p, "all") || qid !== undefined,
+  });
+} catch (err) {
+  console.error(`slack-inbox: ${(err as Error).message}`);
+  process.exit(exitCodeFor(err, 2));
+}
+const out = qid ? lines.filter((l) => (l as { question_id?: string }).question_id === qid) : lines;
+for (const l of out) {
+  // Who wrote it, by name + role, on STDERR so stdout stays pure JSONL for jq.
+  const w = l as { kind?: string; from?: string; reactor?: string; from_name?: string; role?: string };
+  const who = w.from ?? w.reactor;
+  if ((w.kind === "message" || w.kind === "answer" || w.kind === "reaction") && who && who !== "system") {
+    console.error(`# from: ${w.from_name ?? who} (${w.role ?? "owner"})`);
+  }
+  console.log(JSON.stringify(l));
+}
+process.exit(out.length ? 0 : 1);

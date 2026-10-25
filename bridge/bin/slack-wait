@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# slack-wait — block until the owner writes, print the new inbox lines, exit.
+#
+# Why this exists: sessions that watch their inbox with the Monitor tool lose
+# the watcher after at most 30 min, and every expiry wakes the session for one
+# full-context turn just to re-arm it — hundreds of empty turns a day (one
+# session re-armed 174 times in a single transcript). This runs as Bash
+# `run_in_background` instead: it costs nothing while the inbox is quiet, wakes
+# the session exactly once when a message lands, and exits. The session
+# handles the message and re-arms. A background Bash command survived at least
+# 15 min in testing; a Stop hook can re-arm it if it ever dies anyway.
+#
+# Guarantees:
+#   - never loses a line: per-inbox cursor `.last-ts`; lines with
+#     ts > cursor are delivered;
+#   - never re-delivers a line: the cursor moves before exit;
+#   - first run with no cursor starts at "now" (does not dump history);
+#   - one waiter per inbox: a new slack-wait replaces the old one (pid file),
+#     so re-arming twice is harmless;
+#   - auto-✅: every owner `message` / real `answer` on a Slack channel gets
+#     `slack-ack`;
+#   - at most 20 lines per inbox per wake: a stale cursor never dumps history;
+#   - reaction-delivery errors in the inbox never wake the session.
+#
+# Usage (from the folder you work in, so the inbox resolves like slack-say does:
+# the registered project's, else the office's):
+#   slack-wait                         # this folder's inbox
+#   slack-wait --inbox <path> ...      # explicit inbox file(s)
+#   slack-wait --sweep <cmd> --every 600   # also run <cmd> every 600 s; any
+#                                          # stdout it prints counts as an event
+#   slack-wait --no-ack                # do not react ✅
+#   slack-wait --status                # print armed/not armed for this inbox, exit
+# Run it with Bash run_in_background: true. Exit 0 = events printed.
+# ---------------------------------------------------------------------------
+set -u
+
+# The sibling verbs (slack-inbox, slack-ack, slack-ask) are found next to this script, so slack-wait works without
+# ~/.local/bin on PATH. macOS has no `readlink -f`: follow symlinks by hand.
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+  _dir="$(cd "$(dirname "$_src")" && pwd -P)"
+  _src="$(readlink "$_src")"
+  case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
+done
+here="$(cd "$(dirname "$_src")" && pwd -P)"
+unset _src _dir
+# The verbs start with `#!/usr/bin/env bun`; bun installed by ./setup sits in ~/.bun/bin, which may not be on PATH.
+if ! command -v bun >/dev/null 2>&1 && [ -x "$HOME/.bun/bin/bun" ]; then PATH="$HOME/.bun/bin:$PATH"; export PATH; fi
+
+inboxes=()
+sweep=""
+every=600
+MAX_LINES=20
+ack=1
+status=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --inbox) inboxes+=("$2"); shift 2 ;;
+    --sweep) sweep="$2"; shift 2 ;;
+    --every) every="$2"; shift 2 ;;
+    --no-ack) ack=0; shift ;;
+    --status) status=1; shift ;;
+    -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
+    *) echo "slack-wait: unknown arg $1" >&2; exit 2 ;;
+  esac
+done
+
+if [ ${#inboxes[@]} -eq 0 ]; then
+  # slack-inbox explains why on stderr (e.g. no office configured: run ./setup)
+  if ! p=$("$here/slack-inbox" --path); then echo "slack-wait: cannot resolve inbox for $PWD" >&2; exit 2; fi
+  inboxes=("$p")
+fi
+
+pidfile() { echo "$(dirname "$1")/.slack-wait.pid"; }
+
+alive() { # $1 = pid file; true if it names a live slack-wait
+  local pid
+  pid=$(cat "$1" 2>/dev/null) || return 1
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && ps -o command= -p "$pid" 2>/dev/null | grep -q slack-wait
+}
+
+if [ $status -eq 1 ]; then
+  rc=0
+  for f in "${inboxes[@]}"; do
+    if alive "$(pidfile "$f")"; then echo "armed $f (pid $(cat "$(pidfile "$f")"))"; else echo "NOT armed $f"; rc=1; fi
+  done
+  exit $rc
+fi
+
+for f in "${inboxes[@]}"; do
+  mkdir -p "$(dirname "$f")"; touch "$f"
+  pf=$(pidfile "$f")
+  if alive "$pf"; then kill "$(cat "$pf")" 2>/dev/null; fi
+  echo $$ > "$pf"
+  cur="$(dirname "$f")/.last-ts"
+  if [ ! -s "$cur" ]; then
+    last=$(tail -n 1 "$f" | jq -r '.ts // empty' 2>/dev/null)
+    echo "${last:-$(date -u +%Y-%m-%dT%H:%M:%S.000Z)}" > "$cur"
+  fi
+done
+
+cleanup() { for f in "${inboxes[@]}"; do pf=$(pidfile "$f"); [ "$(cat "$pf" 2>/dev/null)" = "$$" ] && rm -f "$pf"; done; }
+trap cleanup EXIT
+trap 'echo "[slack-wait] replaced by a newer waiter — nothing to do."; exit 0' TERM
+
+new_lines() { # $1 inbox → lines newer than its cursor
+  local cur last
+  cur="$(dirname "$1")/.last-ts"
+  last=$(cat "$cur" 2>/dev/null || echo 1970-01-01T00:00:00.000Z)
+  # reaction-delivery errors (e.g. a failed ✅) are the bridge talking to
+  # itself, not the owner: never a wake event.
+  jq -c --arg last "$last" 'select((.ts // "") > $last)
+    | select(((.kind == "error") and ((.ref_id // "") | startswith("reaction_"))) | not)' "$1" 2>/dev/null
+}
+
+next_sweep=$(( $(date +%s) + every ))
+while :; do
+  found=0
+  for f in "${inboxes[@]}"; do [ -n "$(new_lines "$f" | head -c1)" ] && found=1; done
+  sweep_out=""
+  if [ -n "$sweep" ] && [ "$(date +%s)" -ge "$next_sweep" ]; then
+    sweep_out=$(bash -c "$sweep" 2>/dev/null)
+    next_sweep=$(( $(date +%s) + every ))
+  fi
+  if [ $found -eq 1 ] || [ -n "$sweep_out" ]; then
+    [ $found -eq 1 ] && sleep 3   # let a burst of messages land together
+    for f in "${inboxes[@]}"; do
+      lines=$(new_lines "$f")
+      [ -z "$lines" ] && continue
+      n=$(grep -c . <<<"$lines")
+      echo "[slack-wait] new from $(basename "$(dirname "$f")"):"
+      if [ "$n" -gt "$MAX_LINES" ]; then
+        # a stale cursor (e.g. an old watcher never advanced it) must not dump history
+        echo "[slack-wait] skipped $((n - MAX_LINES)) older lines (stale cursor?) — still in $f"
+        lines=$(tail -n "$MAX_LINES" <<<"$lines")
+      fi
+      while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        # who wrote it, by name + role (owner/admin), so the agent addresses each person by name
+        who=$(jq -r 'if (.kind=="message" or .kind=="answer" or .kind=="reaction") and ((.from // .reactor // "") != "system")
+          then "[slack-wait] from: \(.from_name // .from // .reactor) (\(.role // "owner"))" else empty end' <<<"$line" 2>/dev/null)
+        [ -n "$who" ] && echo "$who"
+        if [ ${#line} -gt 1500 ]; then
+          echo "${line:0:1500}…(truncated; full line in $f)"
+        else
+          echo "$line"
+        fi
+        if [ $ack -eq 1 ]; then
+          k=$(jq -r '.kind // ""' <<<"$line"); fr=$(jq -r '.from // ""' <<<"$line")
+          if [ "$k" = "message" ] || { [ "$k" = "answer" ] && [ "$fr" != "system" ]; }; then
+            ch=$(jq -r '.channel // ""' <<<"$line"); ts=$(jq -r '.slack_ts // ""' <<<"$line")
+            # Slack channel ids only (C…/G…/D…)
+            [[ "$ch" =~ ^[CGD][A-Z0-9]{6,}$ ]] && [ -n "$ts" ] && "$here/slack-ack" "$ts" --channel "$ch" >/dev/null 2>&1
+          fi
+        fi
+      done <<<"$lines"
+      # A free-text owner MESSAGE (not an answer) may have resolved or changed a
+      # question still open: remind the agent it can close it (slack-ask --cancel).
+      if jq -e -s 'any(.[]; .kind == "message")' <<<"$lines" >/dev/null 2>&1; then
+        "$here/slack-ask" --open --wait-hint --project "$(basename "$(dirname "$f")")" 2>/dev/null
+      fi
+      jq -r '.ts' <<<"$lines" | tail -n 1 > "$(dirname "$f")/.last-ts"
+    done
+    [ -n "$sweep_out" ] && { echo "[slack-wait] sweep:"; echo "$sweep_out"; }
+    echo "[slack-wait] handled? re-arm the same command with run_in_background (it replaces any old waiter)."
+    exit 0
+  fi
+  sleep 2
+done
