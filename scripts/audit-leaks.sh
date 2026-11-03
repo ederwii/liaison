@@ -5,12 +5,12 @@
 #   2. The maintainer's private deny-list, one extended regex per line (# comments allowed), read from
 #      ${LIAISON_AUDIT_TERMS:-$HOME/.liaison/audit-terms}. It lives outside the repo on purpose and is matched
 #      case-insensitively; a line carries its own word boundaries. Without the file, only layer 1 runs.
-# Skipped: .git, node_modules, .superpowers, __pycache__ (bytecode embeds absolute paths), LICENSE, this script, and
+# Skipped: .git (a directory, or the pointer file inside a git worktree), node_modules, .superpowers, __pycache__ (bytecode embeds absolute paths), LICENSE, this script, and
 # lockfiles (bun.lock, package-lock.json) for the email and id patterns. docs/superpowers/ is scanned like the rest.
 # LIAISON_AUDIT_ROOT overrides the tree to scan (tests).
 cd "${LIAISON_AUDIT_ROOT:-$(dirname "$0")/..}" || exit 2
 
-EXCL=(--exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.superpowers --exclude-dir=__pycache__
+EXCL=(--exclude-dir=.git --exclude=.git --exclude-dir=node_modules --exclude-dir=.superpowers --exclude-dir=__pycache__
       --exclude=LICENSE --exclude=audit-leaks.sh)
 LOCKS=(--exclude=bun.lock --exclude=package-lock.json)
 
