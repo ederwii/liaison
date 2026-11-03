@@ -210,7 +210,8 @@ LIAISON_UNAME=Linux "$LIAISON" daemon status | grep -q running; assert_eq 0 $? "
 
 # A daemon started by hand (even with its .cmd sidecar gone) is stopped by pid before the service is loaded.
 fresh
-printf '#!/bin/bash\necho "$0 $*" >> "%s/calls.log"\ntrap "kill \\$!" TERM\nsleep 30 &\nwait\n' "$TMP" > "$TMP/fake-bin/bun"   # stays a "bun run src/index.ts" process
+# stays a "bun run src/index.ts" process until it is killed (never on a timer); other bun calls (install) return at once
+printf '#!/bin/bash\necho "$0 $*" >> "%s/calls.log"\n[ "$1" = run ] || exit 0\nwhile :; do sleep 1; done\n' "$TMP" > "$TMP/fake-bin/bun"
 run_setup >/dev/null; rc=$?
 assert_eq 0 "$rc" "hand-started daemon: first setup exits 0"
 hpid="$(cat "$LIAISON_HOME/daemon.pid")"
@@ -224,6 +225,7 @@ assert_contains "$(cat "$TMP/calls.log")" "launchctl bootstrap" "hand-started da
 grep -q manual-alive-at-bootstrap "$TMP/calls.log"; assert_eq 1 $? "hand-started daemon then autostart: stopped before the service was loaded"
 assert_contains "$out" "stopped the hand-started daemon (pid $hpid)" "hand-started daemon then autostart: says what it did"
 assert_contains "$(. "$REPO_ROOT/lib/state.sh"; state_detail daemon)" "launchd" "hand-started daemon then autostart: the service owns the daemon"
+kill "$hpid" 2>/dev/null   # only still alive if the assertions above failed
 
 # The rendered unit adapts to the systemd version: append: needs >= 240, older systemd logs to the journal.
 fresh
