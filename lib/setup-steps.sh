@@ -224,46 +224,6 @@ EOM
 
 # --- 4. daemon and autostart -----------------------------------------------------------------------------
 
-# render_service_template <template> <out> <bun> <bridge-dir> <home> <liaison-home> <path>
-render_service_template() {
-  local t="$1" out="$2" tmp name val
-  tmp="$(mktemp "${TMPDIR:-/tmp}/liaison-render.XXXXXX")" || return 1
-  cp "$t" "$tmp" || { rm -f "$tmp"; return 1; }
-  for name in BUN BRIDGE_DIR HOME LIAISON_HOME PATH; do
-    case "$name" in BUN) val="$3" ;; BRIDGE_DIR) val="$4" ;; HOME) val="$5" ;; LIAISON_HOME) val="$6" ;; PATH) val="$7" ;; esac
-    case "$t" in  # plists are XML: escape the three characters that would break the file
-      *.plist.tmpl) val="$(printf '%s' "$val" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')" ;;
-    esac
-    val="$(printf '%s' "$val" | sed -e 's/[\\|&]/\\&/g')"
-    sed -e "s|{$name}|$val|g" "$tmp" > "$tmp.next" && mv "$tmp.next" "$tmp" || { rm -f "$tmp" "$tmp.next"; return 1; }
-  done
-  mkdir -p "$(dirname "$out")" && cat "$tmp" > "$out"
-  rm -f "$tmp"
-}
-
-# autostart_install: renders and loads the service for this platform. Returns 1 when it cannot (caller falls back).
-autostart_install() {
-  local bun dest tmpl svc_path
-  bun="$(daemon_bun_path)" || return 1
-  svc_path="$(dirname "$bun"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-  if is_macos; then
-    command -v launchctl >/dev/null 2>&1 || return 1
-    dest="$HOME/Library/LaunchAgents/$SERVICE_NAME.plist"
-    tmpl="$LIAISON_REPO/bridge/service/liaison-bridge.plist.tmpl"
-    render_service_template "$tmpl" "$dest" "$bun" "$LIAISON_REPO/bridge" "$HOME" "$LIAISON_HOME" "$svc_path" || { rm -f "$dest"; return 1; }
-    launchctl bootout "gui/$(id -u)/$SERVICE_NAME" >/dev/null 2>&1
-    launchctl bootstrap "gui/$(id -u)" "$dest" || { rm -f "$dest"; return 1; }
-    echo launchd
-  else
-    command -v systemctl >/dev/null 2>&1 || return 1
-    dest="$HOME/.config/systemd/user/$SERVICE_NAME.service"
-    tmpl="$LIAISON_REPO/bridge/service/liaison-bridge.service.tmpl"
-    render_service_template "$tmpl" "$dest" "$bun" "$LIAISON_REPO/bridge" "$HOME" "$LIAISON_HOME" "$svc_path" || { rm -f "$dest"; return 1; }
-    systemctl --user daemon-reload && systemctl --user enable --now "$SERVICE_NAME.service" || { rm -f "$dest"; return 1; }
-    echo systemd
-  fi
-}
-
 step_daemon() {
   local kind detail bun
   if [ "$(state_get daemon)" = ok ]; then

@@ -138,6 +138,65 @@ daemon_status() {
   return 1
 }
 
+# --- autostart service (used by ./setup) ---------------------------------------------------------------
+
+# systemd_version: the major version number of the running systemd, empty when unknown.
+systemd_version() {
+  systemctl --version 2>/dev/null | sed -n '1s/^systemd[[:space:]]*\([0-9][0-9]*\).*/\1/p'
+}
+
+# service_log_target: the systemd StandardOutput value. `append:` needs systemd >= 240; older (or unknown) versions use the journal.
+service_log_target() {
+  local v
+  v="$(systemd_version)"
+  case "$v" in
+    ''|*[!0-9]*) echo journal ;;
+    *) if [ "$v" -ge 240 ]; then echo "append:$LIAISON_HOME/daemon.log"; else echo journal; fi ;;
+  esac
+}
+
+# render_service_template <template> <out> <bun> <bridge-dir> <home> <liaison-home> <path> [log-target]
+render_service_template() {
+  local t="$1" out="$2" tmp name val
+  tmp="$(mktemp "${TMPDIR:-/tmp}/liaison-render.XXXXXX")" || return 1
+  cp "$t" "$tmp" || { rm -f "$tmp"; return 1; }
+  for name in BUN BRIDGE_DIR HOME LIAISON_HOME PATH LOG_TARGET; do
+    case "$name" in BUN) val="$3" ;; BRIDGE_DIR) val="$4" ;; HOME) val="$5" ;; LIAISON_HOME) val="$6" ;; PATH) val="$7" ;; LOG_TARGET) val="${8:-journal}" ;; esac
+    case "$t" in  # plists are XML: escape the three characters that would break the file
+      *.plist.tmpl) val="$(printf '%s' "$val" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')" ;;
+    esac
+    val="$(printf '%s' "$val" | sed -e 's/[\\|&]/\\&/g')"
+    sed -e "s|{$name}|$val|g" "$tmp" > "$tmp.next" && mv "$tmp.next" "$tmp" || { rm -f "$tmp" "$tmp.next"; return 1; }
+  done
+  mkdir -p "$(dirname "$out")" && cat "$tmp" > "$out"
+  rm -f "$tmp"
+}
+
+# autostart_install: renders and loads the service for this platform. Returns 1 when it cannot (caller falls back).
+autostart_install() {
+  local bun dest tmpl svc_path log_target
+  bun="$(daemon_bun_path)" || return 1
+  svc_path="$(dirname "$bun"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+  if is_macos; then
+    command -v launchctl >/dev/null 2>&1 || return 1
+    dest="$HOME/Library/LaunchAgents/$SERVICE_NAME.plist"
+    tmpl="$LIAISON_REPO/bridge/service/liaison-bridge.plist.tmpl"
+    render_service_template "$tmpl" "$dest" "$bun" "$LIAISON_REPO/bridge" "$HOME" "$LIAISON_HOME" "$svc_path" || { rm -f "$dest"; return 1; }
+    launchctl bootout "gui/$(id -u)/$SERVICE_NAME" >/dev/null 2>&1
+    launchctl bootstrap "gui/$(id -u)" "$dest" || { rm -f "$dest"; return 1; }
+    echo launchd
+  else
+    command -v systemctl >/dev/null 2>&1 || return 1
+    dest="$HOME/.config/systemd/user/$SERVICE_NAME.service"
+    tmpl="$LIAISON_REPO/bridge/service/liaison-bridge.service.tmpl"
+    log_target="$(service_log_target)"
+    render_service_template "$tmpl" "$dest" "$bun" "$LIAISON_REPO/bridge" "$HOME" "$LIAISON_HOME" "$svc_path" "$log_target" || { rm -f "$dest"; return 1; }
+    [ "$log_target" = journal ] && echo "liaison: this systemd is older than 240: the daemon log goes to the journal (journalctl --user -u $SERVICE_NAME), not daemon.log" >&2
+    systemctl --user daemon-reload && systemctl --user enable --now "$SERVICE_NAME.service" || { rm -f "$dest"; return 1; }
+    echo systemd
+  fi
+}
+
 # daemon_hand_over_to_service: stops a hand-started daemon (by pid) so the autostart service can own the daemon.
 # Prints a line when it stopped one; returns 1 when the process would not go away.
 daemon_hand_over_to_service() {

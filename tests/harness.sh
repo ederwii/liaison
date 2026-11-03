@@ -69,7 +69,8 @@ CURL
   chmod +x "$TMP/fake-bin/curl"
   # Service managers: log argv, exit code from FAKE_LAUNCHCTL_EXIT / FAKE_SYSTEMCTL_EXIT (default 0).
   printf '#!/bin/bash\necho "$0 $*" >> "%s/calls.log"\nexit "${FAKE_LAUNCHCTL_EXIT:-0}"\n' "$TMP" > "$TMP/fake-bin/launchctl"
-  printf '#!/bin/bash\necho "$0 $*" >> "%s/calls.log"\nexit "${FAKE_SYSTEMCTL_EXIT:-0}"\n' "$TMP" > "$TMP/fake-bin/systemctl"
+  # systemctl --version prints FAKE_SYSTEMD_VERSION (default 252) in the real two-token shape.
+  printf '#!/bin/bash\necho "$0 $*" >> "%s/calls.log"\n[ "$1" = "--version" ] && { echo "systemd ${FAKE_SYSTEMD_VERSION:-252} (${FAKE_SYSTEMD_VERSION:-252}.1)"; exit 0; }\nexit "${FAKE_SYSTEMCTL_EXIT:-0}"\n' "$TMP" > "$TMP/fake-bin/systemctl"
   chmod +x "$TMP/fake-bin/launchctl" "$TMP/fake-bin/systemctl"
   export TMP
   export HOME="$TMP/home"

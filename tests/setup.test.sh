@@ -225,6 +225,22 @@ grep -q manual-alive-at-bootstrap "$TMP/calls.log"; assert_eq 1 $? "hand-started
 assert_contains "$out" "stopped the hand-started daemon (pid $hpid)" "hand-started daemon then autostart: says what it did"
 assert_contains "$(. "$REPO_ROOT/lib/state.sh"; state_detail daemon)" "launchd" "hand-started daemon then autostart: the service owns the daemon"
 
+# The rendered unit adapts to the systemd version: append: needs >= 240, older systemd logs to the journal.
+fresh
+out="$(LIAISON_UNAME=Linux FAKE_SYSTEMD_VERSION=252 run_auto)"
+unit="$(cat "$HOME/$UNIT_REL")"
+assert_contains "$unit" "StandardOutput=append:$LIAISON_HOME/daemon.log" "systemd 252: log appended to daemon.log"
+assert_contains "$unit" 'Environment="PATH=' "systemd 252: PATH set"
+assert_contains "$unit" ':%h/.local/bin"' "systemd 252: PATH includes %h/.local/bin"
+assert_contains "$unit" "ExecStart=\"" "systemd 252: ExecStart path quoted"
+fresh
+out="$(LIAISON_UNAME=Linux FAKE_SYSTEMD_VERSION=239 run_auto)"
+unit="$(cat "$HOME/$UNIT_REL")"
+case "$unit" in *append:*) assert_eq "no append:" "append: used" "systemd 239: no append:" ;; *) assert_eq 1 1 ;; esac
+assert_contains "$unit" "StandardOutput=journal" "systemd 239: output goes to the journal"
+assert_contains "$unit" "StandardError=journal" "systemd 239: errors go to the journal"
+assert_contains "$out" "journalctl --user -u liaison-bridge" "systemd 239: says where the log is"
+
 # --- setup_aliases_once ------------------------------------------------------
 fresh
 run_setup >/dev/null
@@ -276,8 +292,12 @@ assert_contains "$plist" "/h/me/.liaison" "plist: LIAISON_ROOT"
 case "$plist" in *"{BUN}"*|*"{BRIDGE_DIR}"*|*"{HOME}"*|*"{LIAISON_HOME}"*|*"{PATH}"*) assert_eq "rendered" "placeholder left" "plist placeholders" ;; *) assert_eq 1 1 ;; esac
 render_service_template "$REPO_ROOT/bridge/service/liaison-bridge.service.tmpl" "$TMP/out.service" "/usr/bin/bun" "/r/bridge" "/h/me" "/h/me/.liaison" "/usr/bin"
 unit="$(cat "$TMP/out.service")"
-assert_contains "$unit" "ExecStart=/usr/bin/bun run /r/bridge/src/index.ts" "unit: ExecStart"
-assert_contains "$unit" "Environment=PATH=/usr/bin" "unit: PATH set explicitly"
+assert_contains "$unit" 'ExecStart="/usr/bin/bun" run "/r/bridge/src/index.ts"' "unit: ExecStart paths are quoted"
+assert_contains "$unit" 'Environment="PATH=/usr/bin:%h/.local/bin"' "unit: PATH set explicitly and includes ~/.local/bin"
+assert_contains "$unit" "StandardOutput=journal" "unit: no log target given reads as the journal"
+render_service_template "$REPO_ROOT/bridge/service/liaison-bridge.service.tmpl" "$TMP/out2.service" "/opt/my apps/bun" "/r/my bridge" "/h/me" "/h/me/.liaison" "/usr/bin" "append:/h/me/.liaison/daemon.log"
+assert_contains "$(cat "$TMP/out2.service")" 'ExecStart="/opt/my apps/bun" run "/r/my bridge/src/index.ts"' "unit: a path with a space stays one argument"
+assert_contains "$(cat "$TMP/out2.service")" "StandardOutput=append:/h/me/.liaison/daemon.log" "unit: append target rendered"
 assert_contains "$unit" "WantedBy=default.target" "unit: install section"
 if command -v plutil >/dev/null 2>&1; then plutil -lint "$TMP/out.plist" >/dev/null 2>&1; assert_eq 0 $? "plist is valid"; fi
 
