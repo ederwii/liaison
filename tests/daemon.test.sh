@@ -93,6 +93,12 @@ assert_eq 1 "$rc" "start fails when the daemon exits at once"
 assert_contains "$out" "daemon.log" "failure points at the log"
 [ -e "$PIDF" ]; assert_eq 1 $? "no pid file left behind"
 
+out="$("$LIAISON" daemon --help 2>/dev/null)"; rc=$?
+assert_eq 0 "$rc" "daemon --help exits 0"
+assert_contains "$out" "usage: liaison daemon" "daemon --help prints to stdout"
+out="$("$LIAISON" daemon 2>&1 >/dev/null)"; rc=$?
+assert_eq 1 "$rc" "daemon with no action exits 1"
+assert_contains "$out" "usage: liaison daemon" "daemon with no action prints usage to stderr"
 out="$("$LIAISON" daemon bogus 2>&1)"; rc=$?
 assert_eq 2 "$rc" "unknown action exits 2"
 

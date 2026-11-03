@@ -51,6 +51,10 @@ The hook command is `python3 "$CLAUDE_PROJECT_DIR/hooks/context-guard.py"`. The 
 Claude Code is opened in, which by default is this checkout. Open a session anywhere else and the hooks do not
 find `hooks/context-guard.py`.
 
+The hook only finds its registration when Claude Code is opened in the office folder (`CLAUDE_PROJECT_DIR` is the
+office). If you open Claude Code in another folder, export `LIAISON_STATE_DIR=<office>/.liaison` first so the hook
+reads the office's registrations.
+
 ## Permission mode
 
 `permission_mode` in `.liaison/config.json` is `supervised` (default) or `unattended`. Unattended is not

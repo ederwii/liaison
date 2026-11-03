@@ -89,7 +89,8 @@ fix back to a builder, and roll staging back only if the owner asks.
 `.liaison/handoff/HANDOFF.md`: `prod lock: <project> <version> since <date -u time>`.
 
 1. Look for a `prod lock:` line. A `prod lock:` line whose deploy is not running (no deploy in progress in
-   STATE NOW → Now) is stale: clear it and log that in the handoff. If one exists for another release, do not wait:
+   STATE NOW → Now) is stale: clear it and log that in the handoff. After a crash, a lock older than N hours (default 4) with no
+   deploy in progress is deleted from STATE NOW and the deletion is noted in the log. If one exists for another release, do not wait:
    post the milestone with ⏳ `Waiting on: production deploy of <other project>`, add this release to STATE NOW → Queue, and go on with other
    work. The next wake checks again.
 2. Follow `prod_approval` from the facts file:

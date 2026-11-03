@@ -32,6 +32,10 @@ The Claude-specific parts sit in `engines/claude/`, behind a short contract (ins
 a session, place skills, shell aliases) described in [engines/claude/README.md](../engines/claude/README.md). Another
 engine means a new folder with those four things. Only `engines/claude/` exists today.
 
+**Why does the context hook not fire when I open Claude Code in another folder?**
+The hook finds its registration through `CLAUDE_PROJECT_DIR`, which must be the office folder. If you open Claude Code
+somewhere else, export `LIAISON_STATE_DIR=<office>/.liaison` before starting it.
+
 **What if setup fails halfway?**
 Run `./setup` again. Every step checks whether it is already done and skips if so. `liaison status` lists each step as
 `ok`, `missing` or `skipped`, and the next command to run. `liaison verify` tests the running path.

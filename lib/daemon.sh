@@ -212,7 +212,8 @@ daemon_main() {
     start)  daemon_start ;;
     stop)   daemon_stop ;;
     status) daemon_status ;;
-    -h|--help|"") echo "usage: liaison daemon start|stop|status" >&2; [ -n "${1:-}" ]; return $? ;;
+    -h|--help)  echo "usage: liaison daemon start|stop|status"; return 0 ;;
+    "")         echo "usage: liaison daemon start|stop|status" >&2; return 1 ;;
     *)      echo "liaison daemon: unknown action '$1' (start, stop, status)" >&2; return 2 ;;
   esac
 }
