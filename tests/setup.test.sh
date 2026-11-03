@@ -85,6 +85,11 @@ out="$(FAKE_CURL_EXIT=6 run_setup)"; rc=$?
 assert_eq 1 "$rc" "slack_unreachable: exit 1"
 assert_contains "$out" "could not reach Slack" "slack_unreachable: message"
 assert_eq missing "$(. "$REPO_ROOT/lib/state.sh"; state_get tokens)" "slack_unreachable: tokens step not recorded"
+out="$(FAKE_CURL_BODY='<html>502 Bad Gateway from proxy</html>' run_setup)"; rc=$?
+assert_eq 1 "$rc" "slack_non_json: exit 1"
+assert_contains "$out" "502 Bad Gateway from proxy" "slack_non_json: shows what came back"
+assert_contains "$out" "LIAISON_SKIP_TOKEN_CHECK=1" "slack_non_json: names the skip variable"
+assert_eq missing "$(. "$REPO_ROOT/lib/state.sh"; state_get tokens)" "slack_non_json: tokens step not recorded"
 out="$(FAKE_CURL_BODY='{"ok":false,"error":"invalid_auth"}' LIAISON_SKIP_TOKEN_CHECK=1 run_setup)"; rc=$?
 assert_eq 0 "$rc" "LIAISON_SKIP_TOKEN_CHECK=1 skips the check"
 

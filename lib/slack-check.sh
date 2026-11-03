@@ -27,7 +27,11 @@ slack_check_one() {
   case "$body" in
     *'"ok":true'*|*'"ok": true'*) return 0 ;;
   esac
-  echo "liaison: Slack rejected the $label token: $(_slack_error "$body")" >&2
+  case "$body" in
+    *'"error"'*) echo "liaison: Slack rejected the $label token: $(_slack_error "$body")" >&2 ;;
+    *) echo "liaison: unexpected reply while checking the $label token (not Slack's JSON; a proxy or a network problem?): $(printf '%s' "$body" | tr '\n' ' ' | cut -c1-200)" >&2
+       echo "liaison: fix the connection and re-run ./setup, or set LIAISON_SKIP_TOKEN_CHECK=1 to skip the check." >&2 ;;
+  esac
   return 1
 }
 
