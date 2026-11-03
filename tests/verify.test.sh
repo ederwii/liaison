@@ -24,17 +24,25 @@ assert_eq 1 "$rc" "bad wait value: still the normal daemon-not-running failure"
 out="$(LIAISON_VERIFY_WAIT_S=7 "$LIAISON" verify 2>&1)"
 case "$out" in *"not a whole number"*) assert_eq "no warning" "$out" "a numeric wait value does not warn" ;; *) assert_eq 1 1 ;; esac
 
-# --- INT and TERM run the cleanup too (not only a normal exit) ---------------------------------------------------
+# --- INT and TERM have their own handlers (bash would already run the EXIT trap, so the registration is what is checked)
+# verify_main sets its traps in the calling shell, so `trap -p` right after it shows what it registered.
+traps="$(bash -c '
+  . "$1/lib/env.sh"; . "$1/lib/common.sh"; . "$1/lib/daemon.sh"; . "$1/lib/projects.sh"; . "$1/lib/verify.sh"
+  verify_main >/dev/null 2>&1
+  trap -p INT TERM
+' _ "$REPO_ROOT" 2>&1)"
+case "$traps" in *"_verify_cleanup; exit 130' SIGINT"*|*"_verify_cleanup; exit 130' INT"*) assert_eq 1 1 ;; *) assert_eq "an INT trap that cleans up and exits 130" "$traps" "INT trap registered by verify_main" ;; esac
+case "$traps" in *"_verify_cleanup; exit 143' SIGTERM"*|*"_verify_cleanup; exit 143' TERM"*) assert_eq 1 1 ;; *) assert_eq "a TERM trap that cleans up and exits 143" "$traps" "TERM trap registered by verify_main" ;; esac
+# and the handlers do run the cleanup and exit with the signal's code
 for sig in TERM INT; do
-  out="$(bash -c '
+  bash -c '
     . "$1/lib/env.sh"; . "$1/lib/common.sh"; . "$1/lib/daemon.sh"; . "$1/lib/projects.sh"; . "$1/lib/verify.sh"
-    LIAISON_REPO="$1"
     verify_main >/dev/null 2>&1
     MARK="$2"
     _verify_cleanup() { echo cleaned > "$MARK"; }
     kill -'"$sig"' $$
     sleep 2
-  ' _ "$REPO_ROOT" "$TMP/cleanup-$sig" 2>&1)"; rc=$?
+  ' _ "$REPO_ROOT" "$TMP/cleanup-$sig" >/dev/null 2>&1; rc=$?
   [ -f "$TMP/cleanup-$sig" ]; assert_eq 0 $? "$sig runs the verify cleanup"
   if [ "$sig" = TERM ]; then assert_eq 143 "$rc" "TERM exits 143"; else assert_eq 130 "$rc" "INT exits 130"; fi
 done
