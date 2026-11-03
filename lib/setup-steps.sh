@@ -310,6 +310,11 @@ step_greeting() {
         pending) GREETING_PENDING=1
                  say "greeting: queued, not delivered yet; check $LIAISON_HOME/daemon.log, then run: liaison verify"
                  return 0 ;;
+        paused|error:*)
+          # Already queued once: queueing another would greet twice once the office is fixed.
+          GREETING_PENDING=1
+          say "greeting: queued earlier but not delivered ($st); fix that, then run: liaison verify"
+          return 0 ;;
       esac ;;
   esac
   tmpl="$LIAISON_REPO/templates/greeting.md"

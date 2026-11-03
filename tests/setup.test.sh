@@ -376,6 +376,22 @@ printf '{"cursors":{"office":%s}}' "$(wc -c < "$LIAISON_HOME/office/outbox.jsonl
 out="$(run_setup)"
 assert_contains "$out" "greeting: delivered" "I4: delivered once the cursor passed the line"
 assert_eq ok "$(state_get greeting)" "I4: greeting turns ok"
+# an office that is paused, or whose delivery gave up, is not greeted a second time
+fresh
+out="$(FAKE_SAY_DELIVER=0 run_setup)"
+printf '{"cursors":{"office":%s},"paused":{"office":true}}' "$(wc -c < "$LIAISON_HOME/office/outbox.jsonl" | tr -d ' ')" > "$LIAISON_HOME/state.json"
+out="$(run_setup)"; rc=$?
+assert_eq 0 "$rc" "I4 paused: re-run exits 0"
+assert_eq 1 "$(grep -c 'slack-say' "$TMP/calls.log")" "I4 paused: no second greeting queued"
+assert_contains "$out" "paused" "I4 paused: says why"
+assert_eq missing "$(state_get greeting)" "I4 paused: greeting stays missing"
+mid="$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' "$LIAISON_HOME/office/outbox.jsonl" | head -n 1)"
+printf '{"cursors":{"office":0}}' > "$LIAISON_HOME/state.json"
+printf '{"kind":"error","ref_id":"%s","reason":"channel_not_found"}\n' "$mid" > "$LIAISON_HOME/office/inbox.jsonl"
+out="$(run_setup)"; rc=$?
+assert_eq 0 "$rc" "I4 error: re-run exits 0"
+assert_eq 1 "$(grep -c 'slack-say' "$TMP/calls.log")" "I4 error: no second greeting queued"
+assert_contains "$out" "channel_not_found" "I4 error: names the reason"
 # a delivered greeting prints the delivered line on the first run
 fresh
 out="$(run_setup)"
