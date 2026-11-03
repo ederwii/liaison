@@ -15,11 +15,11 @@ claude
 ```
 
 `./setup` shows how to create the Slack app from `bridge/slack-manifest.yml`, asks for its two tokens (hidden input)
-and your Slack member ID (shown as you type, it is not a secret), starts the bridge, creates `#liaison-office` and
-offers the shell aliases `claude3` and `claude5`, which start `claude` with a 300k or 500k auto-compact window.
-If it stops halfway, run it again:
-finished steps are skipped. `liaison status` shows the checklist and `liaison verify` sends a test message through
-the whole path.
+and your Slack member ID (shown as you type, it is not a secret), checks the tokens against Slack before saving
+anything, starts the bridge, creates `#liaison-office` and offers the shell aliases `claude3` and `claude5`, which
+start `claude` with a 300k or 500k auto-compact window. If it stops halfway, run it again: finished steps are
+skipped. `liaison status` shows the checklist and `liaison verify` sends a test message through the whole path.
+Installing without network access: `LIAISON_SKIP_TOKEN_CHECK=1 ./setup` skips the token check.
 
 ## What you get
 
@@ -76,5 +76,6 @@ rm -rf ~/.liaison          # tokens, registry, inbox and outbox files
 - [docs/faq.md](docs/faq.md): why Slack, why Bun, what it reads, how to stop it.
 - [advanced/README.md](advanced/README.md): departments in tmux.
 - [engines/claude/README.md](engines/claude/README.md): the Claude Code layer, and how another engine would plug in.
+- [CHANGELOG.md](CHANGELOG.md): what changed in each version (current: 0.1.1).
 
 MIT licensed.
