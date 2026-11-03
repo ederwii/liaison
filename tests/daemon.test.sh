@@ -81,6 +81,31 @@ echo "$BYSTANDER" > "$PIDF"; rm -f "$PIDF.cmd"
 "$LIAISON" daemon stop >/dev/null 2>&1
 kill -0 "$BYSTANDER" 2>/dev/null; assert_eq 0 $? "sidecar missing: an unrelated process behind the pid is never signalled"
 
+# A daemon from before this version (command line `bun run src/index.ts`, no .cmd sidecar) is refused, not duplicated.
+( cd "$REPO_ROOT/bridge" && exec -a "bun run src/index.ts" sleep 30 ) &
+OLD=$!; disown "$OLD"
+echo "$OLD" > "$PIDF"; rm -f "$PIDF.cmd"
+sleep 0.3
+out="$("$LIAISON" daemon start 2>&1)"; rc=$?
+assert_eq 1 "$rc" "earlier-version daemon: start refuses"
+assert_contains "$out" "(pid $OLD)" "earlier-version daemon: start prints its pid"
+assert_contains "$out" "liaison daemon stop" "earlier-version daemon: start says how to stop it"
+kill -0 "$OLD" 2>/dev/null; assert_eq 0 $? "earlier-version daemon: start left it alone"
+out="$("$LIAISON" daemon stop 2>&1)"; rc=$?
+assert_eq 0 "$rc" "earlier-version daemon: stop exits 0"
+assert_contains "$out" "was pid $OLD" "earlier-version daemon: stop says which pid"
+kill -0 "$OLD" 2>/dev/null; assert_eq 1 $? "earlier-version daemon: stop kills it"
+# the same command line from another folder is not ours
+( cd "$TMP" && exec -a "bun run src/index.ts" sleep 30 ) &
+OTHER2=$!; disown "$OTHER2"
+echo "$OTHER2" > "$PIDF"; rm -f "$PIDF.cmd"
+sleep 0.3
+out="$("$LIAISON" daemon start 2>&1)"; rc=$?
+assert_eq 0 "$rc" "another folder's 'bun run src/index.ts': start is not blocked"
+"$LIAISON" daemon stop >/dev/null 2>&1
+kill -0 "$OTHER2" 2>/dev/null; assert_eq 0 $? "another folder's 'bun run src/index.ts' survives stop"
+kill "$OTHER2" 2>/dev/null
+
 # (b) A hand-started daemon next to an installed autostart service: status says the service should own it.
 out="$("$LIAISON" daemon start 2>&1)"; pid="$(cat "$PIDF")"
 mkdir -p "$HOME/Library/LaunchAgents"; : > "$HOME/Library/LaunchAgents/liaison-bridge.plist"

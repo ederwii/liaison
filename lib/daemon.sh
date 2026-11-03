@@ -49,6 +49,28 @@ daemon_live_pid() {
   printf '%s\n' "$pid"
 }
 
+# _proc_cwd <pid>: the working directory of a process, empty when it cannot be read (/proc on Linux, lsof elsewhere).
+_proc_cwd() {
+  if [ -d "/proc/$1" ]; then readlink "/proc/$1/cwd" 2>/dev/null; return 0; fi
+  command -v lsof >/dev/null 2>&1 || return 0
+  lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1
+}
+
+# daemon_legacy_pid: prints the pid of a daemon started by an earlier version (command line `bun run src/index.ts`,
+# no .cmd sidecar to recognise it by) that runs from this install's bridge folder. Empty output when there is none.
+daemon_legacy_pid() {
+  local p cmd cwd
+  for p in $( { [ -f "$(daemon_pid_file)" ] && tr -d '[:space:]' < "$(daemon_pid_file)"; echo; ps -axo pid=,command= 2>/dev/null | sed -n 's/^[[:space:]]*\([0-9][0-9]*\)[[:space:]].*bun run src\/index\.ts.*$/\1/p'; } ) ; do
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$p" 2>/dev/null || continue
+    cmd="$(_proc_cmd "$p")"
+    case "$cmd" in *"run src/index.ts"*) ;; *) continue ;; esac
+    cwd="$(_proc_cwd "$p")"
+    if [ "$cwd" = "$LIAISON_REPO/bridge" ]; then printf '%s\n' "$p"; return 0; fi
+  done
+  return 0
+}
+
 _daemon_forget() { rm -f "$(daemon_pid_file)" "$(daemon_cmd_file)"; }
 
 _daemon_service_hint() {
@@ -67,6 +89,11 @@ daemon_start() {
   if [ -n "$svc" ]; then
     _daemon_service_hint "$svc" >&2
     echo "liaison: not starting a second daemon next to the autostart service" >&2
+    return 1
+  fi
+  pid="$(daemon_legacy_pid)"
+  if [ -n "$pid" ]; then
+    echo "liaison: a daemon from an earlier version is still running (pid $pid); run 'liaison daemon stop' first" >&2
     return 1
   fi
   bun="$(daemon_bun_path)" || { echo "liaison: bun not found; run ./setup (or: curl -fsSL https://bun.sh/install | bash)" >&2; return 1; }
@@ -93,6 +120,16 @@ daemon_start() {
 daemon_stop() {
   local pid i svc
   if ! pid="$(daemon_live_pid)"; then
+    pid="$(daemon_legacy_pid)"
+    if [ -n "$pid" ]; then
+      kill "$pid" 2>/dev/null
+      i=0
+      while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+      if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
+      _daemon_forget
+      say "stopped (was pid $pid, started by an earlier version)"
+      return 0
+    fi
     _daemon_forget
     say "stopped"
     svc="$(daemon_service_file)"
