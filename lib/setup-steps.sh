@@ -329,14 +329,28 @@ step_greeting() {
       slug="$2"; id="${3%;}"
       st="$(greeting_wait "$slug" "$id")"
       case "$st" in
-        posted) state_set greeting ok "delivered to #$chan"; say "greeting: delivered"; return 0 ;;
+        posted)
+          # A line dropped while paused also reads as posted once the channel is resumed (the cursor moved past it,
+          # nothing was sent, nothing replays it): the marker below says it was dropped.
+          case "$detail" in
+            *"dropped while paused"*)
+              if ! daemon_live_pid >/dev/null && ! daemon_service_running >/dev/null; then
+                GREETING_PENDING=1
+                say "greeting: the first one was dropped while #$chan was paused; start the daemon (liaison daemon start), then run ./setup again"
+                return 0
+              fi
+              requeue="paused"
+              say "greeting: the first one was dropped while #$chan was paused; queueing it again once" ;;
+            *) state_set greeting ok "delivered to #$chan"; say "greeting: delivered"; return 0 ;;
+          esac ;;
         pending) GREETING_PENDING=1
                  say "greeting: queued, not delivered yet; check $LIAISON_HOME/daemon.log, then run: liaison verify"
                  return 0 ;;
         paused)
-          # Already queued once and dropped while paused: another line would greet twice once the office resumes.
+          # Dropped while paused, and nothing replays it on resume: remember that, so the run after "resume" queues it again.
           GREETING_PENDING=1
-          say "greeting: queued earlier but dropped, #$chan is paused; say \"resume\" in #$chan in Slack, then run: liaison verify"
+          state_set greeting missing "queued $slug $id; dropped while paused"
+          say "greeting: dropped, #$chan is paused; say \"resume\" in #$chan in Slack, then run ./setup again"
           return 0 ;;
         error:*)
           # The daemon gave up on that line (its cursor is past it): queue the greeting again, once in this run.
@@ -369,7 +383,11 @@ step_greeting() {
       say "greeting: delivered${requeue:+ (requeued after $requeue)}" ;;
     *)
       GREETING_PENDING=1
-      if [ -n "$requeue" ] && [ -n "$slug" ] && [ -n "$id" ]; then
+      if [ "$st" = paused ] && [ -n "$slug" ] && [ -n "$id" ]; then
+        state_set greeting missing "queued $slug $id; dropped while paused${requeue:+; requeued ($requeue)}"
+        say "greeting: dropped, #$chan is paused; say \"resume\" in #$chan in Slack, then run ./setup again"
+        return 0
+      elif [ -n "$requeue" ] && [ -n "$slug" ] && [ -n "$id" ]; then
         state_set greeting missing "queued $slug $id; requeued ($requeue); now $st; run: liaison verify"
         say "greeting: requeued ($requeue) but still not delivered ($st); not trying again in this run: liaison verify"
         return 0

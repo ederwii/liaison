@@ -416,6 +416,27 @@ printf '{"cursors":{"office":%s}}' "$(wc -c < "$LIAISON_HOME/office/outbox.jsonl
 out="$(run_setup)"
 assert_eq ok "$(state_get greeting)" "I4 error then delivered: greeting ok"
 
+# pause -> greeting dropped -> resume -> setup re-queues exactly one greeting; ok only after delivery
+fresh
+out="$(FAKE_SAY_DELIVER=0 run_setup)"
+endpos() { wc -c < "$LIAISON_HOME/office/outbox.jsonl" | tr -d ' '; }
+printf '{"cursors":{"office":%s},"paused":{"office":true}}' "$(endpos)" > "$LIAISON_HOME/state.json"   # the daemon dropped the line while paused
+out="$(FAKE_SAY_DELIVER=0 run_setup)"
+assert_contains "$out" "resume" "I4: paused run tells the user to resume"
+assert_eq 1 "$(wc -l < "$LIAISON_HOME/office/outbox.jsonl" | tr -d ' ')" "I4: nothing re-queued while still paused"
+assert_eq missing "$(state_get greeting)" "I4: greeting not ok while paused"
+printf '{"cursors":{"office":%s}}' "$(endpos)" > "$LIAISON_HOME/state.json"   # resumed: cursor past the line, no delivery, no pause flag
+out="$(FAKE_SAY_DELIVER=0 run_setup)"
+assert_eq 2 "$(wc -l < "$LIAISON_HOME/office/outbox.jsonl" | tr -d ' ')" "I4: after resume exactly one new greeting is queued"
+assert_eq missing "$(state_get greeting)" "I4: a dropped line is not read as delivered"
+assert_contains "$(state_detail greeting)" "requeued (paused)" "I4: state records requeued (paused)"
+case "$out" in *"greeting: delivered"*) assert_eq "not delivered" "$out" "I4: no delivered claim for the dropped line" ;; *) assert_eq 1 1 ;; esac
+out="$(FAKE_SAY_DELIVER=0 run_setup)"
+assert_eq 2 "$(wc -l < "$LIAISON_HOME/office/outbox.jsonl" | tr -d ' ')" "I4: a further run does not queue a third"
+printf '{"cursors":{"office":%s}}' "$(endpos)" > "$LIAISON_HOME/state.json"   # the daemon delivered the second line
+out="$(run_setup)"
+assert_eq ok "$(state_get greeting)" "I4: ok only after the re-queued greeting is delivered"
+
 # a delivered greeting prints the delivered line on the first run
 fresh
 out="$(run_setup)"
