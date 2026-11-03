@@ -24,7 +24,7 @@ case "$pid" in ''|*[!0-9]*) assert_eq "a pid" "'$pid'" "start writes the pid fil
 assert_contains "$out" "running (pid $pid)" "start reports the pid"
 assert_eq "running (pid $pid)" "$("$LIAISON" daemon status)" "status: running"
 kill -0 "$pid" 2>/dev/null; assert_eq 0 $? "the daemon process is alive"
-assert_contains "$(cat "$TMP/calls.log")" "bun run src/index.ts" "bun runs the bridge entry point"
+assert_contains "$(cat "$TMP/calls.log")" "bun run $REPO_ROOT/bridge/src/index.ts" "bun runs the bridge entry point (absolute path)"
 assert_file_mode "$LIAISON_HOME/daemon.log" 600 "log is private"
 
 out="$("$LIAISON" daemon start 2>&1)"; rc=$?
@@ -70,6 +70,13 @@ out="$("$LIAISON" daemon start 2>&1)"
 assert_contains "$out" "already running (pid $pid)" "sidecar missing: start does not spawn a second daemon"
 "$LIAISON" daemon stop >/dev/null 2>&1
 kill -0 "$pid" 2>/dev/null; assert_eq 1 $? "sidecar missing: stop kills the daemon by pid"
+# the same command shape from another project (pid reuse after a reboot) is not ours either
+printf '#!/bin/bash\nexec -a "bun run src/index.ts" sleep 30\n' > "$TMP/other-bun"; chmod +x "$TMP/other-bun"
+"$TMP/other-bun" & OTHER=$!; disown "$OTHER"
+echo "$OTHER" > "$PIDF"; rm -f "$PIDF.cmd"
+"$LIAISON" daemon stop >/dev/null 2>&1
+kill -0 "$OTHER" 2>/dev/null; assert_eq 0 $? "sidecar missing: another project's 'run src/index.ts' is never signalled"
+kill "$OTHER" 2>/dev/null
 echo "$BYSTANDER" > "$PIDF"; rm -f "$PIDF.cmd"
 "$LIAISON" daemon stop >/dev/null 2>&1
 kill -0 "$BYSTANDER" 2>/dev/null; assert_eq 0 $? "sidecar missing: an unrelated process behind the pid is never signalled"

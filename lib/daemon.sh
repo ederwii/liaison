@@ -4,7 +4,7 @@
 #
 # Files in $LIAISON_HOME: daemon.pid (the pid), daemon.pid.cmd (that process's command line when it started,
 # so a stale pid reused by an unrelated process after a reboot is never signalled; when it is missing the command
-# line must contain "run src/index.ts"), daemon.log.
+# line must contain "run <this repo>/bridge/src/index.ts"), daemon.log.
 
 SERVICE_NAME="liaison-bridge"
 
@@ -44,7 +44,7 @@ daemon_live_pid() {
   else
     # The .cmd sidecar is gone (never written, or deleted): still recognise our own daemon by what it runs,
     # so the pid is not forgotten and the process orphaned. An unrelated process that reused the pid does not match.
-    case "$(_proc_cmd "$pid")" in *"run src/index.ts"*) ;; *) return 1 ;; esac
+    case "$(_proc_cmd "$pid")" in *"run $LIAISON_REPO/bridge/src/index.ts"*) ;; *) return 1 ;; esac
   fi
   printf '%s\n' "$pid"
 }
@@ -76,7 +76,7 @@ daemon_start() {
   (
     umask 077
     cd "$LIAISON_REPO/bridge" || exit 1
-    LIAISON_ROOT="$LIAISON_HOME" nohup "$bun" run src/index.ts </dev/null >>"$log" 2>&1 &
+    LIAISON_ROOT="$LIAISON_HOME" nohup "$bun" run "$LIAISON_REPO/bridge/src/index.ts" </dev/null >>"$log" 2>&1 &
     echo "$!" > "$(daemon_pid_file)"
   ) || return 1
   sleep 1                                    # long enough for a bad config to make it exit
