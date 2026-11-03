@@ -1,6 +1,6 @@
 {
   "name": "liaison-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Local daemon + CLI so any Claude Code session can talk to its owner over Slack at zero token cost while waiting.",
