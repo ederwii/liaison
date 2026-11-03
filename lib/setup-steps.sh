@@ -294,8 +294,30 @@ greeting_wait() {
 
 GREETING_PENDING=0
 
+# greeting_gave_up <slug> <id>: yes when the daemon's saved cursor is already past that outbox line.
+greeting_gave_up() {
+  python3 - "$LIAISON_HOME" "$1" "$2" <<'PY'
+import json, os, sys
+root, slug, mid = sys.argv[1:4]
+try:
+    data = open(os.path.join(root, slug, "outbox.jsonl"), "rb").read()
+    st = json.load(open(os.path.join(root, "state.json")))
+except (OSError, ValueError):
+    print("no"); sys.exit(0)
+pos = 0
+for raw in data.splitlines(True):
+    pos += len(raw)
+    try:
+        if json.loads(raw).get("id") == mid:
+            print("yes" if st.get("cursors", {}).get(slug, 0) >= pos else "no"); sys.exit(0)
+    except ValueError:
+        pass
+print("no")
+PY
+}
+
 step_greeting() {
-  local tmpl text name chan rc out slug id st detail
+  local tmpl text name chan rc out slug id st detail requeue=""
   [ "$(state_get greeting)" = ok ] && return 0
   WORK=1
   chan="$(config_get office_channel)"
@@ -311,11 +333,20 @@ step_greeting() {
         pending) GREETING_PENDING=1
                  say "greeting: queued, not delivered yet; check $LIAISON_HOME/daemon.log, then run: liaison verify"
                  return 0 ;;
-        paused|error:*)
-          # Already queued once: queueing another would greet twice once the office is fixed.
+        paused)
+          # Already queued once and dropped while paused: another line would greet twice once the office resumes.
           GREETING_PENDING=1
-          say "greeting: queued earlier but not delivered ($st); fix that, then run: liaison verify"
+          say "greeting: queued earlier but dropped, #$chan is paused; say \"resume\" in #$chan in Slack, then run: liaison verify"
           return 0 ;;
+        error:*)
+          # The daemon gave up on that line (its cursor is past it): queue the greeting again, once in this run.
+          GREETING_PENDING=1
+          if [ "$(greeting_gave_up "$slug" "$id")" != yes ]; then
+            say "greeting: queued earlier, the daemon is still handling it ($st); run: liaison verify"
+            return 0
+          fi
+          requeue="${st#error:}"
+          say "greeting: the first one failed ($requeue); queueing it again once" ;;
       esac ;;
   esac
   tmpl="$LIAISON_REPO/templates/greeting.md"
@@ -334,11 +365,15 @@ step_greeting() {
   [ -n "$slug" ] && [ -n "$id" ] && st="$(greeting_wait "$slug" "$id")"
   case "$st" in
     posted)
-      state_set greeting ok "delivered to #$chan"
-      say "greeting: delivered" ;;
+      state_set greeting ok "delivered to #$chan${requeue:+; requeued ($requeue)}"
+      say "greeting: delivered${requeue:+ (requeued after $requeue)}" ;;
     *)
       GREETING_PENDING=1
-      if [ -n "$slug" ] && [ -n "$id" ] && [ "$st" = pending ]; then
+      if [ -n "$requeue" ] && [ -n "$slug" ] && [ -n "$id" ]; then
+        state_set greeting missing "queued $slug $id; requeued ($requeue); now $st; run: liaison verify"
+        say "greeting: requeued ($requeue) but still not delivered ($st); not trying again in this run: liaison verify"
+        return 0
+      elif [ -n "$slug" ] && [ -n "$id" ] && [ "$st" = pending ]; then
         state_set greeting missing "queued $slug $id; not delivered yet (check $LIAISON_HOME/daemon.log, then: liaison verify)"
       else
         state_set greeting missing "queued, delivery not confirmed ($st); check $LIAISON_HOME/daemon.log, then: liaison verify"

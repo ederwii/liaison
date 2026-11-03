@@ -383,15 +383,32 @@ printf '{"cursors":{"office":%s},"paused":{"office":true}}' "$(wc -c < "$LIAISON
 out="$(run_setup)"; rc=$?
 assert_eq 0 "$rc" "I4 paused: re-run exits 0"
 assert_eq 1 "$(grep -c 'slack-say' "$TMP/calls.log")" "I4 paused: no second greeting queued"
-assert_contains "$out" "paused" "I4 paused: says why"
+assert_contains "$out" "say \"resume\" in #" "I4 paused: prints how to resume"
 assert_eq missing "$(state_get greeting)" "I4 paused: greeting stays missing"
 mid="$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' "$LIAISON_HOME/office/outbox.jsonl" | head -n 1)"
-printf '{"cursors":{"office":0}}' > "$LIAISON_HOME/state.json"
+printf '{"cursors":{"office":%s}}' "$(wc -c < "$LIAISON_HOME/office/outbox.jsonl" | tr -d ' ')" > "$LIAISON_HOME/state.json"
 printf '{"kind":"error","ref_id":"%s","reason":"channel_not_found"}\n' "$mid" > "$LIAISON_HOME/office/inbox.jsonl"
-out="$(run_setup)"; rc=$?
+out="$(FAKE_SAY_DELIVER=0 run_setup)"; rc=$?
 assert_eq 0 "$rc" "I4 error: re-run exits 0"
-assert_eq 1 "$(grep -c 'slack-say' "$TMP/calls.log")" "I4 error: no second greeting queued"
+assert_eq 2 "$(wc -l < "$LIAISON_HOME/office/outbox.jsonl" | tr -d ' ')" "I4 error: exactly one new greeting line in the outbox"
 assert_contains "$out" "channel_not_found" "I4 error: names the reason"
+assert_contains "$out" "queueing it again once" "I4 error: says it re-queued"
+assert_contains "$(state_detail greeting)" "requeued (channel_not_found)" "I4 error: state records the requeue"
+# the requeued greeting fails again: no loop inside the run, the message names liaison verify
+mid2="$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' "$LIAISON_HOME/office/outbox.jsonl" | tail -n 1)"
+printf '{"cursors":{"office":%s}}' "$(wc -c < "$LIAISON_HOME/office/outbox.jsonl" | tr -d ' ')" > "$LIAISON_HOME/state.json"
+printf '{"kind":"error","ref_id":"%s","reason":"channel_not_found"}\n' "$mid2" >> "$LIAISON_HOME/office/inbox.jsonl"
+out="$(FAKE_SAY_DELIVER=0 run_setup)"
+assert_eq 3 "$(wc -l < "$LIAISON_HOME/office/outbox.jsonl" | tr -d ' ')" "I4 error twice: one more line per setup run, no loop"
+assert_contains "$out" "liaison verify" "I4 error twice: names liaison verify"
+assert_eq missing "$(state_get greeting)" "I4 error twice: greeting stays missing"
+# once the requeued greeting is delivered the step turns ok
+mid3="$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' "$LIAISON_HOME/office/outbox.jsonl" | tail -n 1)"
+printf '{"cursors":{"office":%s}}' "$(wc -c < "$LIAISON_HOME/office/outbox.jsonl" | tr -d ' ')" > "$LIAISON_HOME/state.json"
+: > "$LIAISON_HOME/office/inbox.jsonl"
+out="$(run_setup)"
+assert_eq ok "$(state_get greeting)" "I4 error then delivered: greeting ok"
+
 # a delivered greeting prints the delivered line on the first run
 fresh
 out="$(run_setup)"
