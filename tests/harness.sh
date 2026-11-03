@@ -58,6 +58,15 @@ if [ "\$1 \$2" = "pr view" ] && [ -n "\${FAKE_GH_VIEW_EXIT:-}" ]; then exit "\$F
 exit "\${FAKE_GH_EXIT:-0}"
 GH
   chmod +x "$TMP/fake-bin/gh"
+  # curl stands in for Slack: prints FAKE_CURL_BODY (default {"ok":true}), exits FAKE_CURL_EXIT (default 0). Args are logged, stdin (where tokens travel) is not.
+  cat > "$TMP/fake-bin/curl" <<CURL
+#!/bin/bash
+echo "\$0 \$*" >> "$TMP/calls.log"
+cat >/dev/null
+if [ -n "\${FAKE_CURL_BODY:-}" ]; then printf '%s' "\$FAKE_CURL_BODY"; else printf '{"ok":true}'; fi
+exit "\${FAKE_CURL_EXIT:-0}"
+CURL
+  chmod +x "$TMP/fake-bin/curl"
   # Service managers: log argv, exit code from FAKE_LAUNCHCTL_EXIT / FAKE_SYSTEMCTL_EXIT (default 0).
   printf '#!/bin/bash\necho "$0 $*" >> "%s/calls.log"\nexit "${FAKE_LAUNCHCTL_EXIT:-0}"\n' "$TMP" > "$TMP/fake-bin/launchctl"
   printf '#!/bin/bash\necho "$0 $*" >> "%s/calls.log"\nexit "${FAKE_SYSTEMCTL_EXIT:-0}"\n' "$TMP" > "$TMP/fake-bin/systemctl"

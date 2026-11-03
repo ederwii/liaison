@@ -71,6 +71,23 @@ T_OWNER=bob run_setup >/dev/null; rc=$?
 assert_eq 2 "$rc" "owner id must look like a member id"
 [ -e "$LIAISON_HOME/.env" ] && assert_eq "absent" "present" "still no .env" || assert_eq 1 1
 
+# --- slack rejects the tokens: nothing is recorded ---------------------------
+fresh
+out="$(FAKE_CURL_BODY='{"ok":false,"error":"invalid_auth"}' run_setup)"; rc=$?
+assert_eq 1 "$rc" "slack_rejects_tokens: exit 1"
+assert_contains "$out" "invalid_auth" "slack_rejects_tokens: Slack's error is printed"
+[ -e "$LIAISON_HOME/.env" ] && assert_eq "absent" "present" "slack_rejects_tokens: no .env" || assert_eq 1 1
+assert_eq missing "$(. "$REPO_ROOT/lib/state.sh"; state_get tokens)" "slack_rejects_tokens: tokens step not recorded"
+assert_eq "[]" "$(. "$REPO_ROOT/lib/state.sh"; config_get owner_user_ids 2>/dev/null)" "slack_rejects_tokens: no config written"
+case "$out" in *"$BOT"*|*"$APP"*) assert_eq "no token" "leaked" "slack_rejects_tokens: no token echoed" ;; *) assert_eq 1 1 ;; esac
+grep -qF -e "$BOT" -e "$APP" "$TMP/calls.log"; assert_eq 1 $? "slack_rejects_tokens: tokens not on curl's command line"
+out="$(FAKE_CURL_EXIT=6 run_setup)"; rc=$?
+assert_eq 1 "$rc" "slack_unreachable: exit 1"
+assert_contains "$out" "could not reach Slack" "slack_unreachable: message"
+assert_eq missing "$(. "$REPO_ROOT/lib/state.sh"; state_get tokens)" "slack_unreachable: tokens step not recorded"
+out="$(FAKE_CURL_BODY='{"ok":false,"error":"invalid_auth"}' LIAISON_SKIP_TOKEN_CHECK=1 run_setup)"; rc=$?
+assert_eq 0 "$rc" "LIAISON_SKIP_TOKEN_CHECK=1 skips the check"
+
 # --- setup_trims_token_whitespace -----------------------------------------
 fresh
 T_BOT="$(printf 'xoxb-fake1 \n')" T_APP="$(printf '  xapp-fake2\n')" run_setup >/dev/null; rc=$?
@@ -274,7 +291,7 @@ mkdir -p "$HOME/.bun/bin" "$TMP/nobun"
 printf '#!/bin/bash\necho "$0 $*" >> "%s/calls.log"\nexec sleep 30\n' "$TMP" > "$HOME/.bun/bin/bun"
 chmod +x "$HOME/.bun/bin/bun"
 for t in git python3 jq; do ln -s "$(command -v $t)" "$TMP/nobun/$t"; done
-for t in claude slack-say tmux; do ln -s "$TMP/fake-bin/$t" "$TMP/nobun/$t"; done
+for t in claude slack-say tmux curl; do ln -s "$TMP/fake-bin/$t" "$TMP/nobun/$t"; done
 # a slack-register that, like the real one (`#!/usr/bin/env bun`), needs bun on PATH
 printf '#!/bin/bash\ncommand -v bun >/dev/null 2>&1 || { echo "env: bun: No such file or directory" >&2; exit 127; }\necho "$0 $*" >> "%s/calls.log"\nexit 0\n' "$TMP" > "$TMP/nobun/slack-register"
 chmod +x "$TMP/nobun/slack-register"

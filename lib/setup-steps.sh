@@ -212,6 +212,7 @@ EOM
   app="$(collect LIAISON_APP_TOKEN valid_app 1 "App-Level Token (xapp-...)" "it must start with xapp-")" || exit $?
   owners="$(collect LIAISON_OWNER_USER_IDS valid_owner 0 "Your Slack member ID" "member ids look like U01ABCDEF, comma-separated")" || exit $?
   owners="$(normalise_owners "$owners")"
+  slack_check_tokens "$bot" "$app" || exit 1   # nothing is written (no .env, no state) until Slack accepts both tokens
   write_env_file "$bot" "$app" "$owners" || die "could not write $LIAISON_HOME/.env"
   ids_json=""
   for id in $(printf '%s' "$owners" | tr ',' ' '); do ids_json="${ids_json:+$ids_json,}\"$id\""; n=$((n + 1)); done

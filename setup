@@ -7,6 +7,7 @@ LIAISON_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$LIAISON_REPO/lib/common.sh"
 . "$LIAISON_REPO/lib/state.sh"
 . "$LIAISON_REPO/lib/daemon.sh"
+. "$LIAISON_REPO/lib/slack-check.sh"
 . "$LIAISON_REPO/lib/verify.sh"
 . "$LIAISON_REPO/lib/setup-steps.sh"
 
