@@ -208,6 +208,23 @@ assert_eq 0 "$rc" "systemd autostart failure: setup still succeeds"
 assert_contains "$out" "starting the daemon by hand instead" "systemd failure message"
 LIAISON_UNAME=Linux "$LIAISON" daemon status | grep -q running; assert_eq 0 $? "manual daemon started after the systemd fallback"
 
+# A daemon started by hand (even with its .cmd sidecar gone) is stopped by pid before the service is loaded.
+fresh
+printf '#!/bin/bash\necho "$0 $*" >> "%s/calls.log"\ntrap "kill \\$!" TERM\nsleep 30 &\nwait\n' "$TMP" > "$TMP/fake-bin/bun"   # stays a "bun run src/index.ts" process
+run_setup >/dev/null; rc=$?
+assert_eq 0 "$rc" "hand-started daemon: first setup exits 0"
+hpid="$(cat "$LIAISON_HOME/daemon.pid")"
+rm -f "$LIAISON_HOME/daemon.pid.cmd"
+printf '#!/bin/bash\necho "$0 $*" >> "%s/calls.log"\nif [ "$1" = bootstrap ]; then kill -0 %s 2>/dev/null && echo "manual-alive-at-bootstrap" >> "%s/calls.log"; fi\nexit 0\n' "$TMP" "$hpid" "$TMP" > "$TMP/fake-bin/launchctl"
+chmod +x "$TMP/fake-bin/launchctl"
+out="$(LIAISON_UNAME=Darwin run_auto)"; rc=$?
+assert_eq 0 "$rc" "hand-started daemon then autostart: exit 0"
+kill -0 "$hpid" 2>/dev/null; assert_eq 1 $? "hand-started daemon then autostart: the manual process is gone"
+assert_contains "$(cat "$TMP/calls.log")" "launchctl bootstrap" "hand-started daemon then autostart: service loaded"
+grep -q manual-alive-at-bootstrap "$TMP/calls.log"; assert_eq 1 $? "hand-started daemon then autostart: stopped before the service was loaded"
+assert_contains "$out" "stopped the hand-started daemon (pid $hpid)" "hand-started daemon then autostart: says what it did"
+assert_contains "$(. "$REPO_ROOT/lib/state.sh"; state_detail daemon)" "launchd" "hand-started daemon then autostart: the service owns the daemon"
+
 # --- setup_aliases_once ------------------------------------------------------
 fresh
 run_setup >/dev/null

@@ -3,7 +3,8 @@
 # Needs LIAISON_REPO and LIAISON_HOME (lib/env.sh). bash 3.2 compatible.
 #
 # Files in $LIAISON_HOME: daemon.pid (the pid), daemon.pid.cmd (that process's command line when it started,
-# so a stale pid reused by an unrelated process after a reboot is never signalled), daemon.log.
+# so a stale pid reused by an unrelated process after a reboot is never signalled; when it is missing the command
+# line must contain "run src/index.ts"), daemon.log.
 
 SERVICE_NAME="liaison-bridge"
 
@@ -37,9 +38,14 @@ daemon_live_pid() {
   pid="$(tr -d '[:space:]' < "$(daemon_pid_file)")"
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 1
-  [ -f "$(daemon_cmd_file)" ] || return 1
-  recorded="$(cat "$(daemon_cmd_file)")"
-  [ -n "$recorded" ] && [ "$(_proc_cmd "$pid")" = "$recorded" ] || return 1
+  if [ -f "$(daemon_cmd_file)" ]; then
+    recorded="$(cat "$(daemon_cmd_file)")"
+    [ -n "$recorded" ] && [ "$(_proc_cmd "$pid")" = "$recorded" ] || return 1
+  else
+    # The .cmd sidecar is gone (never written, or deleted): still recognise our own daemon by what it runs,
+    # so the pid is not forgotten and the process orphaned. An unrelated process that reused the pid does not match.
+    case "$(_proc_cmd "$pid")" in *"run src/index.ts"*) ;; *) return 1 ;; esac
+  fi
   printf '%s\n' "$pid"
 }
 
@@ -116,12 +122,30 @@ daemon_service_running() {
 
 daemon_status() {
   local pid svc kind
-  if pid="$(daemon_live_pid)"; then say "running (pid $pid)"; return 0; fi
+  if pid="$(daemon_live_pid)"; then
+    say "running (pid $pid)"
+    svc="$(daemon_service_file)"
+    if [ -n "$svc" ]; then
+      say "note: started by hand, but the autostart service is installed and should own the daemon: run 'liaison daemon stop', then restart the service"
+      _daemon_service_hint "$svc"
+    fi
+    return 0
+  fi
   if kind="$(daemon_service_running)"; then say "running (service: $kind)"; return 0; fi
   say "stopped"
   svc="$(daemon_service_file)"
   [ -n "$svc" ] && _daemon_service_hint "$svc"
   return 1
+}
+
+# daemon_hand_over_to_service: stops a hand-started daemon (by pid) so the autostart service can own the daemon.
+# Prints a line when it stopped one; returns 1 when the process would not go away.
+daemon_hand_over_to_service() {
+  local pid
+  pid="$(daemon_live_pid)" || return 0
+  daemon_stop >/dev/null 2>&1
+  if daemon_live_pid >/dev/null; then echo "liaison: could not stop the hand-started daemon (pid $pid)" >&2; return 1; fi
+  say "daemon: stopped the hand-started daemon (pid $pid); the autostart service takes over"
 }
 
 daemon_main() {

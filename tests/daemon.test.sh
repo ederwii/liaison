@@ -58,6 +58,34 @@ out="$(PATH=/usr/bin:/bin "$LIAISON" daemon start 2>&1)"; rc=$?
 assert_eq 0 "$rc" "start finds ~/.bun/bin/bun when PATH lacks bun"
 PATH=/usr/bin:/bin "$LIAISON" daemon stop >/dev/null 2>&1
 
+# A bun stand-in on PATH (a real bun elsewhere on PATH must not win) that stays a "bun run src/index.ts" process, like the real one.
+printf '#!/bin/bash\ntrap "kill \\$!" TERM\nsleep 30 &\nwait\n' > "$TMP/fake-bin/bun"; chmod +x "$TMP/fake-bin/bun"
+# (a) The .cmd sidecar going missing must not make the daemon forget its pid: status sees it, stop kills it.
+out="$("$LIAISON" daemon start 2>&1)"; rc=$?
+assert_eq 0 "$rc" "sidecar: start exits 0"
+pid="$(cat "$PIDF")"
+rm -f "$PIDF.cmd"
+assert_eq "running (pid $pid)" "$("$LIAISON" daemon status)" "sidecar missing: status still sees the daemon"
+out="$("$LIAISON" daemon start 2>&1)"
+assert_contains "$out" "already running (pid $pid)" "sidecar missing: start does not spawn a second daemon"
+"$LIAISON" daemon stop >/dev/null 2>&1
+kill -0 "$pid" 2>/dev/null; assert_eq 1 $? "sidecar missing: stop kills the daemon by pid"
+echo "$BYSTANDER" > "$PIDF"; rm -f "$PIDF.cmd"
+"$LIAISON" daemon stop >/dev/null 2>&1
+kill -0 "$BYSTANDER" 2>/dev/null; assert_eq 0 $? "sidecar missing: an unrelated process behind the pid is never signalled"
+
+# (b) A hand-started daemon next to an installed autostart service: status says the service should own it.
+out="$("$LIAISON" daemon start 2>&1)"; pid="$(cat "$PIDF")"
+mkdir -p "$HOME/Library/LaunchAgents"; : > "$HOME/Library/LaunchAgents/liaison-bridge.plist"
+out="$(LIAISON_UNAME=Darwin "$LIAISON" daemon status)"; rc=$?
+assert_eq 0 "$rc" "hand-started next to a service: exit 0"
+assert_contains "$out" "running (pid $pid)" "hand-started next to a service: pid shown"
+assert_contains "$out" "started by hand" "hand-started next to a service: status says so"
+assert_contains "$out" "launchctl kickstart" "hand-started next to a service: how to restart the service"
+rm -f "$HOME/Library/LaunchAgents/liaison-bridge.plist"
+"$LIAISON" daemon stop >/dev/null 2>&1
+
+
 # A daemon that dies immediately is reported, not claimed as running.
 printf '#!/bin/bash\nexit 1\n' > "$HOME/.bun/bin/bun"
 out="$(PATH=/usr/bin:/bin "$LIAISON" daemon start 2>&1)"; rc=$?

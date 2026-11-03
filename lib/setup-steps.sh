@@ -269,8 +269,12 @@ step_daemon() {
   if [ "$(state_get daemon)" = ok ]; then
     detail="$(state_detail daemon)"
     case "$detail" in
-      manual*) daemon_live_pid >/dev/null && return 0
-               say "daemon: was not running; starting it" ;;
+      manual*) if daemon_live_pid >/dev/null; then
+                 # running by hand: leave it, unless an autostart service is wanted and not installed yet
+                 { [ "${OPT_NO_AUTOSTART:-0}" = 1 ] || [ -n "$(daemon_service_file)" ]; } && return 0
+               else
+                 say "daemon: was not running; starting it"
+               fi ;;
       *)       return 0 ;;
     esac
   fi
@@ -280,7 +284,7 @@ step_daemon() {
     ( cd "$LIAISON_REPO/bridge" && "$bun" install --frozen-lockfile >&2 ) || die "bun install failed in $LIAISON_REPO/bridge"
   fi
   if [ "${OPT_NO_AUTOSTART:-0}" != 1 ] && confirm "Start the bridge automatically at login?" y; then
-    daemon_stop >/dev/null 2>&1
+    daemon_hand_over_to_service || exit 1
     if kind="$(autostart_install)"; then
       state_set daemon ok "autostart via $kind"
       say "daemon: autostart installed ($kind)"
