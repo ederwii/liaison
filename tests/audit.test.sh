@@ -26,6 +26,18 @@ assert_eq 1 "$rc" "terms file, tree with the term: exit 1"
 assert_contains "$out" "bad.txt:1:this has a BadWord in it" "the offending line is printed"
 rm -f "$T/bad.txt"
 
+# a git worktree's `.git` pointer file holds an absolute path and is skipped; the same path in a normal file still fails
+HP="/Us""ers/someone"   # split so this file is not itself a hit
+printf 'gitdir: %s/repo/.git/worktrees/wt\n' "$HP" > "$T/.git"
+out="$(LIAISON_AUDIT_TERMS="$TMP/none" audit)"; rc=$?
+assert_eq 0 "$rc" ".git pointer file with a home path: skipped"
+printf 'see %s/repo/notes\n' "$HP" > "$T/notes.txt"
+out="$(LIAISON_AUDIT_TERMS="$TMP/none" audit)"; rc=$?
+assert_eq 1 "$rc" "the same path in a normal file still fails"
+assert_contains "$out" "notes.txt" "the normal file is the one reported"
+case "$out" in *"/.git:"*) assert_eq "only notes.txt" "$out" "the pointer file is not reported" ;; *) assert_eq 1 1 ;; esac
+rm -f "$T/.git" "$T/notes.txt"
+
 # generic patterns, with no terms file
 export LIAISON_AUDIT_TERMS="$TMP/none"
 AT='@'; printf 'write to someone%sexample.com\n' "$AT" > "$T/mail.txt"
