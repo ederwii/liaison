@@ -280,6 +280,7 @@ step_office_channel() {
 # (posted | pending | paused | missing | error:<reason>), stopping early on anything but pending.
 greeting_wait() {
   local st="" start now
+  verify_check_wait
   start="$(date +%s)"
   while :; do
     st="$(_verify_delivery "$LIAISON_HOME" "$1" "$2")"

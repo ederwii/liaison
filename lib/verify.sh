@@ -16,6 +16,16 @@ VERIFY_WAIT_S="${LIAISON_VERIFY_WAIT_S:-20}"   # the env override exists for tes
 _VERIFY_TMP=""
 _VERIFY_FAKE_PID=""
 
+# verify_check_wait: VERIFY_WAIT_S must be a whole number of seconds; anything else warns once and falls back to 20.
+# Called where the value is used (not at source time, so unrelated commands never warn).
+verify_check_wait() {
+  case "$VERIFY_WAIT_S" in
+    ''|*[!0-9]*)
+      echo "liaison: LIAISON_VERIFY_WAIT_S='${LIAISON_VERIFY_WAIT_S:-}' is not a whole number of seconds; using 20" >&2
+      VERIFY_WAIT_S=20 ;;
+  esac
+}
+
 _verify_fail() { echo "verify: $*" >&2; }
 
 _verify_cleanup() {
@@ -105,7 +115,10 @@ verify_main() {
     esac
   done
   command -v python3 >/dev/null 2>&1 || { _verify_fail "python3 is required"; return 1; }
+  verify_check_wait
   trap '_verify_cleanup' EXIT
+  trap '_verify_cleanup; exit 130' INT
+  trap '_verify_cleanup; exit 143' TERM
 
   office="$LIAISON_OFFICE"
   if [ "$fake" -eq 1 ]; then

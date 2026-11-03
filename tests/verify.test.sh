@@ -16,6 +16,29 @@ assert_contains "$out" "liaison daemon start" "points at the fix"
 out="$("$LIAISON" verify --bogus 2>&1)"; rc=$?
 assert_eq 2 "$rc" "unknown option exits 2"
 
+# --- a non-numeric LIAISON_VERIFY_WAIT_S warns and uses the default instead of an arithmetic error -----------------
+out="$(LIAISON_VERIFY_WAIT_S=abc "$LIAISON" verify 2>&1)"; rc=$?
+assert_contains "$out" "LIAISON_VERIFY_WAIT_S='abc' is not a whole number of seconds; using 20" "bad wait value: warning"
+case "$out" in *"syntax error"*|*"operand expected"*|*"value too great"*) assert_eq "no arithmetic error" "$out" "bad wait value: no arithmetic error" ;; *) assert_eq 1 1 ;; esac
+assert_eq 1 "$rc" "bad wait value: still the normal daemon-not-running failure"
+out="$(LIAISON_VERIFY_WAIT_S=7 "$LIAISON" verify 2>&1)"
+case "$out" in *"not a whole number"*) assert_eq "no warning" "$out" "a numeric wait value does not warn" ;; *) assert_eq 1 1 ;; esac
+
+# --- INT and TERM run the cleanup too (not only a normal exit) ---------------------------------------------------
+for sig in TERM INT; do
+  out="$(bash -c '
+    . "$1/lib/env.sh"; . "$1/lib/common.sh"; . "$1/lib/daemon.sh"; . "$1/lib/projects.sh"; . "$1/lib/verify.sh"
+    LIAISON_REPO="$1"
+    verify_main >/dev/null 2>&1
+    MARK="$2"
+    _verify_cleanup() { echo cleaned > "$MARK"; }
+    kill -'"$sig"' $$
+    sleep 2
+  ' _ "$REPO_ROOT" "$TMP/cleanup-$sig" 2>&1)"; rc=$?
+  [ -f "$TMP/cleanup-$sig" ]; assert_eq 0 $? "$sig runs the verify cleanup"
+  if [ "$sig" = TERM ]; then assert_eq 143 "$rc" "TERM exits 143"; else assert_eq 130 "$rc" "INT exits 130"; fi
+done
+
 # --- fake round trip, real bun -----------------------------------------------------------------------------------
 if [ -z "$REAL_BUN" ]; then
   echo "skip: bun is not installed on this machine, so the --fake round trip was not run"
